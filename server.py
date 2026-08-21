@@ -392,11 +392,12 @@ body:before{
         0 0 14px rgba(0,234,255,.45);
 }
 
-.poster img{
+.poster video{
     width:100%;
     height:100%;
     display:block;
     object-fit:cover;
+    background:#000;
 }
 
 .play{
@@ -417,6 +418,25 @@ body:before{
     text-shadow:0 0 10px #00eaff;
     box-shadow:0 0 18px rgba(0,238,255,.35);
     cursor:pointer;
+    z-index:5;
+}
+
+.play.hidden{
+    display:none;
+}
+
+.video-error{
+    display:none;
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    width:90%;
+    text-align:center;
+    color:#ffffff;
+    font-size:14px;
+    line-height:1.6;
+    z-index:4;
 }
 
 .actions{
@@ -500,6 +520,33 @@ body:before{
     font-weight:500;
 }
 
+.credit{
+    margin-top:25px;
+    text-align:center;
+    color:#bfeeff;
+    font-size:14px;
+    line-height:1.8;
+    opacity:.9;
+}
+
+.credit a{
+    color:#ff8fce;
+    text-decoration:none;
+    font-weight:600;
+}
+
+.credit a:hover{
+    color:#ffffff;
+    text-decoration:underline;
+}
+
+.instagram-icon{
+    width:17px;
+    height:17px;
+    vertical-align:-3px;
+    margin:0 4px;
+}
+
 .status{
     font-size:13px;
     color:#8edfff;
@@ -528,6 +575,10 @@ body:before{
     .info{
         font-size:14px;
     }
+
+    .credit{
+        font-size:13px;
+    }
 }
 """
 
@@ -551,7 +602,10 @@ async def home():
 
     <section class="frame">
         <div class="poster">
-            <img src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85">
+            <img
+                src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
+                style="width:100%;height:100%;object-fit:cover;"
+            >
         </div>
 
         <div class="status"
@@ -612,10 +666,12 @@ async def watch(token):
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
 <title>STADY-PROXY | {safe_name}</title>
+
 <style>{STADY_CSS}</style>
 </head>
 
@@ -629,13 +685,39 @@ async def watch(token):
 
 <div class="poster">
 
-<img
-src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-alt="Video thumbnail">
+<!-- =====================================================
+     REAL HTML5 VIDEO PLAYER
+     It stays on this webpage.
+     ===================================================== -->
 
-<button class="play"
-        aria-label="Play"
-        onclick="stream()">▶</button>
+<video
+    id="videoPlayer"
+    preload="metadata"
+    playsinline
+    controls
+    poster="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
+>
+    <source src="{stream_url}" type="{html.escape(row['mime'])}">
+    Your browser does not support HTML5 video.
+</video>
+
+<!-- CUSTOM PLAY BUTTON -->
+
+<button
+    class="play"
+    id="playButton"
+    aria-label="Play video"
+    onclick="playVideo()">
+    ▶
+</button>
+
+<div
+    class="video-error"
+    id="videoError">
+    ⚠️ This video format cannot be played by this browser.
+    <br>
+    Try Download or an external video player.
+</div>
 
 </div>
 
@@ -720,6 +802,57 @@ nPlayer
 
 </section>
 
+<!-- =====================================================
+     INSTAGRAM CREDIT
+     ===================================================== -->
+
+<div class="credit">
+
+by
+
+<a
+    href="https://www.instagram.com/2aswadhh_._kr?igsi=MXV5NGR3M2l1aDRq"
+    target="_blank"
+    rel="noopener noreferrer">
+
+    <svg
+        class="instagram-icon"
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg">
+
+        <rect
+            x="3"
+            y="3"
+            width="18"
+            height="18"
+            rx="5"
+            stroke="currentColor"
+            stroke-width="2"/>
+
+        <circle
+            cx="12"
+            cy="12"
+            r="4"
+            stroke="currentColor"
+            stroke-width="2"/>
+
+        <circle
+            cx="17.5"
+            cy="6.5"
+            r="1"
+            fill="currentColor"/>
+
+    </svg>
+
+    aswadh_kr
+
+</a>
+
+&nbsp;and made with ♥️
+
+</div>
+
 <div class="status" id="status">
 STADY-PROXY • READY
 </div>
@@ -732,29 +865,147 @@ const STREAM_URL = {stream_url!r};
 const DOWNLOAD_URL = {download_url!r};
 const BOT_USERNAME = {BOT_USERNAME!r};
 
+const videoPlayer =
+    document.getElementById("videoPlayer");
+
+const playButton =
+    document.getElementById("playButton");
+
+const videoError =
+    document.getElementById("videoError");
+
 function setStatus(text) {{
     document.getElementById("status").textContent = text;
 }}
+
+/* =========================================================
+   PLAY VIDEO ON THE SAME WEBPAGE
+   ========================================================= */
+
+async function playVideo() {{
+
+    try {{
+
+        videoError.style.display = "none";
+
+        await videoPlayer.play();
+
+        playButton.classList.add("hidden");
+
+        setStatus("STADY-PROXY • PLAYING");
+
+    }} catch (error) {{
+
+        console.log("Video playback error:", error);
+
+        videoError.style.display = "block";
+
+        setStatus(
+            "Browser cannot play this video format"
+        );
+    }}
+}}
+
+/* =========================================================
+   WHEN VIDEO STARTS
+   ========================================================= */
+
+videoPlayer.addEventListener("play", function() {{
+
+    playButton.classList.add("hidden");
+
+    setStatus("STADY-PROXY • PLAYING");
+
+}});
+
+/* =========================================================
+   WHEN VIDEO PAUSES
+   ========================================================= */
+
+videoPlayer.addEventListener("pause", function() {{
+
+    if (!videoPlayer.ended) {{
+        playButton.classList.remove("hidden");
+        setStatus("STADY-PROXY • PAUSED");
+    }}
+
+}});
+
+/* =========================================================
+   VIDEO ENDED
+   ========================================================= */
+
+videoPlayer.addEventListener("ended", function() {{
+
+    playButton.classList.remove("hidden");
+
+    setStatus("STADY-PROXY • FINISHED");
+
+}});
+
+/* =========================================================
+   VIDEO ERROR
+   ========================================================= */
+
+videoPlayer.addEventListener("error", function() {{
+
+    videoError.style.display = "block";
+
+    setStatus(
+        "Browser cannot play this video format"
+    );
+
+}});
+
+/* =========================================================
+   DOWNLOAD
+   ========================================================= */
 
 function downloadFile() {{
     location.href = DOWNLOAD_URL;
 }}
 
+/* =========================================================
+   STREAM BUTTON
+   ========================================================= */
+
 function stream() {{
-    location.href = STREAM_URL;
+    videoPlayer.scrollIntoView({{
+        behavior: "smooth",
+        block: "center"
+    }});
+
+    playVideo();
 }}
 
+/* =========================================================
+   TELEGRAM DOWNLOAD
+   ========================================================= */
+
 function telegramDownload() {{
+
     if (!BOT_USERNAME) {{
-        setStatus("Telegram bot not ready");
+
+        setStatus(
+            "Telegram bot not ready"
+        );
+
         return;
     }}
 
-    location.href = "https://t.me/" + BOT_USERNAME;
+    location.href =
+        "https://t.me/" +
+        BOT_USERNAME;
 }}
 
+/* =========================================================
+   PLAYER MENU
+   ========================================================= */
+
 function togglePlayers() {{
-    const players = document.getElementById("players");
+
+    const players =
+        document.getElementById("players");
 
     players.style.display =
         players.style.display === "block"
@@ -762,14 +1013,16 @@ function togglePlayers() {{
         : "block";
 }}
 
-function openPlayer(player) {{
+/* =========================================================
+   EXTERNAL PLAYERS
+   ========================================================= */
 
-    const encoded =
-        encodeURIComponent(STREAM_URL);
+function openPlayer(player) {{
 
     let intent = "";
 
     if (player === "mx") {{
+
         intent =
         "intent://" +
         "{stream_no_scheme}" +
@@ -779,6 +1032,7 @@ function openPlayer(player) {{
     }}
 
     else if (player === "vlc") {{
+
         intent =
         "intent://" +
         "{stream_no_scheme}" +
@@ -788,6 +1042,7 @@ function openPlayer(player) {{
     }}
 
     else if (player === "playit") {{
+
         intent =
         "intent://" +
         "{stream_no_scheme}" +
@@ -797,6 +1052,7 @@ function openPlayer(player) {{
     }}
 
     else if (player === "kmplayer") {{
+
         intent =
         "intent://" +
         "{stream_no_scheme}" +
