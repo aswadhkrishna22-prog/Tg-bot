@@ -209,6 +209,12 @@ async def receive_file(event):
         )
 
         stream_url = f"{PUBLIC_URL}/watch/{token}"
+
+        download_url = (
+            f"{PUBLIC_URL}/{token}/"
+            f"{quote(filename, safe='')}?action=download"
+        )
+
         size_gb = size / 1024 / 1024 / 1024
 
         print("\n" + "=" * 60)
@@ -216,13 +222,41 @@ async def receive_file(event):
         print("[+] Filename:", filename)
         print(f"[+] Size: {size_gb:.2f} GB")
         print("[+] Token:", token)
+        print("[+] Stream URL:", stream_url)
+        print("[+] Download URL:", download_url)
         print("=" * 60)
+
+        # ====================================================
+        # INLINE BUTTONS
+        # ====================================================
+
+        from telethon import Button
+
+        buttons = [
+            [
+                Button.url(
+                    "⚡ FAST DOWNLOAD 💥",
+                    download_url
+                )
+            ],
+            [
+                Button.url(
+                    "▶️ WATCH / STREAM",
+                    stream_url
+                )
+            ]
+        ]
+
+        # ====================================================
+        # TELEGRAM MESSAGE
+        # ====================================================
 
         await event.reply(
             "✅ STADY-PROXY file ready!\n\n"
             f"🎬 {filename}\n"
             f"📦 Size: {size_gb:.2f} GB\n\n"
-            f"▶️ Watch / Stream:\n{stream_url}"
+            "👇 Choose an option:",
+            buttons=buttons
         )
 
     except Exception as error:
@@ -733,10 +767,6 @@ function openPlayer(player) {{
     const encoded =
         encodeURIComponent(STREAM_URL);
 
-    // Android intent URLs.
-    // If the installed player does not support this intent,
-    // the browser URL is used as fallback.
-
     let intent = "";
 
     if (player === "mx") {{
@@ -964,4 +994,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[+] Server stopped.")
-
