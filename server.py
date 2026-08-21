@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -36,8 +37,9 @@ PUBLIC_URL = os.getenv(
 HOST = "0.0.0.0"
 PORT = 8000
 
-# Telegram chunk size.
 CHUNK_SIZE = 512 * 1024
+
+BOT_USERNAME = ""
 
 # ============================================================
 # VALIDATE CONFIG
@@ -102,10 +104,6 @@ def get_file(token):
 
 app = FastAPI(title="Study Proxy")
 
-# ============================================================
-# TELEGRAM CLIENT
-# ============================================================
-
 bot = TelegramClient("proxybot", API_ID, API_HASH)
 
 # ============================================================
@@ -126,7 +124,6 @@ def get_mime(filename):
     return "application/octet-stream"
 
 def parse_range(range_header, file_size):
-    # FIXED: Cleaned up the corrupted parse_range function
     if not range_header:
         return 0, file_size - 1
     if not range_header.startswith("bytes="):
@@ -208,17 +205,9 @@ async def receive_file(event):
         chat_id = int(event.chat_id)
         message_id = int(event.id)
 
-        # IMPORTANT: We DO NOT download the Telegram file.
         add_file(token=token, chat_id=chat_id, message_id=message_id, filename=filename, size=size, mime=mime)
-
         encoded_filename = quote(filename, safe="")
-
-        # User clicks this link to see the premium webpage
         stream_url = f"{PUBLIC_URL}/watch/{token}"
-        
-        # Raw download link
-        download_url = f"{PUBLIC_URL}/{token}/{encoded_filename}?action=download"
-
         size_gb = size / 1024 / 1024 / 1024
 
         print()
@@ -244,206 +233,128 @@ async def receive_file(event):
         except Exception:
             pass
 
-# ============================================================
-# START COMMAND
-# ============================================================
-
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
     await event.reply(
-        "👋 Study File Proxy\n\n"
+        "👋 STADY-PROXY\n\n"
         "Send me a video/file and I will create a premium browser streaming link!"
     )
 
 # ============================================================
-# HTML THEME (CYBERPUNK NEON)
+# STADY-PROXY HTML THEME
 # ============================================================
 
-CYBERPUNK_CSS = """
+STADY_CSS = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap');
-    
-    * { box-sizing: border-box; }
-    
-    body {
-        background-color: #05050a;
-        background-image: 
-            linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
-        background-size: 30px 30px;
-        color: #00f3ff;
-        font-family: 'Rajdhani', sans-serif;
-        margin: 0;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        min-height: 100vh;
-    }
-    
-    h1.logo {
-        font-family: 'Orbitron', sans-serif;
-        font-size: 32px;
-        color: #00f3ff;
-        text-shadow: 0 0 10px rgba(0, 243, 255, 0.6), 0 0 20px rgba(0, 243, 255, 0.4);
-        margin: 20px 0 30px 0;
-        text-transform: uppercase;
-        letter-spacing: 3px;
-        text-align: center;
-    }
-    
-    .main-container {
-        width: 100%;
-        max-width: 450px;
-        border: 2px solid #1a2b3c;
-        border-radius: 15px;
-        padding: 25px 20px;
-        background: rgba(5, 10, 20, 0.85);
-        box-shadow: 0 0 15px rgba(0, 243, 255, 0.1), inset 0 0 20px rgba(0, 243, 255, 0.05);
-        position: relative;
-    }
-    
-    /* Tech Corner Borders */
-    .main-container::before, .main-container::after {
-        content: '';
-        position: absolute;
-        width: 25px; height: 25px;
-        border: 2px solid #00f3ff;
-        box-shadow: 0 0 10px rgba(0,243,255,0.5);
-    }
-    .main-container::before { top: -2px; left: -2px; border-right: none; border-bottom: none; border-radius: 15px 0 0 0; }
-    .main-container::after { bottom: -2px; right: -2px; border-left: none; border-top: none; border-radius: 0 0 15px 0; }
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Poppins:wght@400;500;600&display=swap');
 
-    .player-box {
-        width: 100%;
-        border: 2px solid #ff00ff;
-        border-radius: 12px;
-        overflow: hidden;
-        box-shadow: 0 0 15px rgba(255, 0, 255, 0.3);
-        margin-bottom: 25px;
-        background: #000;
-        position: relative;
-    }
-    
-    video, audio {
-        width: 100%;
-        display: block;
-        max-height: 250px;
-        outline: none;
-    }
-    
-    .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        padding: 14px;
-        margin-bottom: 15px;
-        border-radius: 8px;
-        text-decoration: none;
-        font-family: 'Orbitron', sans-serif;
-        font-size: 14px;
-        font-weight: 700;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        background: rgba(0, 243, 255, 0.02);
-    }
-    
-    .btn-magenta {
-        border: 2px solid #ff00ff;
-        color: #ff00ff;
-        box-shadow: 0 0 10px rgba(255, 0, 255, 0.2), inset 0 0 10px rgba(255, 0, 255, 0.1);
-    }
-    .btn-magenta:hover { 
-        background: rgba(255, 0, 255, 0.15); 
-        box-shadow: 0 0 20px rgba(255, 0, 255, 0.6), inset 0 0 15px rgba(255, 0, 255, 0.4); 
-    }
-
-    .btn-cyan {
-        border: 2px solid #00f3ff;
-        color: #00f3ff;
-        box-shadow: 0 0 10px rgba(0, 243, 255, 0.2), inset 0 0 10px rgba(0, 243, 255, 0.1);
-    }
-    .btn-cyan:hover { 
-        background: rgba(0, 243, 255, 0.15); 
-        box-shadow: 0 0 20px rgba(0, 243, 255, 0.6), inset 0 0 15px rgba(0, 243, 255, 0.4); 
-    }
-
-    .info-box {
-        margin-top: 25px;
-        padding: 18px;
-        border: 1px solid rgba(0, 243, 255, 0.3);
-        border-radius: 10px;
-        background: rgba(0, 0, 0, 0.6);
-        text-align: left;
-        font-size: 16px;
-        line-height: 1.8;
-    }
-    
-    .info-row {
-        display: flex;
-        align-items: center;
-        margin-bottom: 10px;
-    }
-    
-    .info-icon { margin-right: 12px; font-size: 18px; width: 20px; text-align: center; }
-    .info-label { color: #8899aa; margin-right: 8px; font-weight: 600; }
-    .info-value { color: #ffffff; font-weight: 700; word-break: break-all; }
-    
-    .eq-bars {
-        display: inline-flex;
-        align-items: flex-end;
-        height: 14px;
-        margin-left: 10px;
-        gap: 3px;
-    }
-    .eq-bar {
-        width: 3px;
-        background-color: #00f3ff;
-        border-radius: 1px;
-        animation: eq 1s ease-in-out infinite alternate;
-        box-shadow: 0 0 5px #00f3ff;
-    }
-    @keyframes eq {
-        0% { height: 4px; }
-        100% { height: 14px; }
-    }
+*{{box-sizing:border-box}}
+html,body{{margin:0;min-height:100%;font-family:Poppins,Arial,sans-serif;background:#030914;color:#eaf7ff}}
+body{{
+  overflow-x:hidden;
+  background:
+    radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
+    radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
+    linear-gradient(180deg,#020812,#061629 55%,#020812);
+}}
+body:before{{
+  content:"";position:fixed;inset:0;pointer-events:none;opacity:.32;
+  background-image:linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
+  background-size:34px 34px;
+  mask-image:linear-gradient(to bottom,transparent,#000 12%,#000 85%,transparent);
+}}
+.page{{width:min(720px,100%);margin:auto;padding:22px 14px 45px}}
+.brand{{
+  text-align:center;font-family:Orbitron,sans-serif;font-size:clamp(28px,7vw,46px);
+  font-weight:800;letter-spacing:2px;margin:8px 0 20px;
+  color:#69f7ff;text-shadow:0 0 8px #00eaff,0 0 22px #7c28ff,0 0 40px #ff18d5;
+}}
+.frame{{
+  position:relative;padding:12px;border:2px solid #42eaff;border-radius:15px;
+  background:linear-gradient(145deg,rgba(12,43,72,.9),rgba(4,13,28,.94));
+  box-shadow:0 0 10px #00eaff, inset 0 0 20px rgba(0,234,255,.15),0 0 30px rgba(255,0,213,.2);
+}}
+.frame:before,.frame:after{{
+  content:"";position:absolute;height:5px;width:90px;top:-5px;
+  background:linear-gradient(90deg,#00eaff,#bdfcff,#ff24d7);
+  box-shadow:0 0 12px #00eaff;border-radius:4px
+}}
+.frame:before{{left:35px}}.frame:after{{right:35px}}
+.poster{{
+  position:relative;overflow:hidden;border:2px solid #36f3ff;border-radius:8px;
+  aspect-ratio:16/9;background:#0a2039;
+  box-shadow:inset 0 0 22px rgba(0,255,255,.35),0 0 14px rgba(0,234,255,.45);
+}}
+.poster img{{width:100%;height:100%;display:block;object-fit:cover}}
+.play{{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:118px;height:82px;border:2px solid #9afcff;border-radius:16px;
+  background:rgba(75,90,112,.58);backdrop-filter:blur(5px);
+  color:#dffcff;font-size:44px;line-height:78px;text-align:center;
+  text-shadow:0 0 10px #00eaff;box-shadow:0 0 18px rgba(0,238,255,.35);
+  cursor:pointer;
+}}
+.actions{{display:grid;gap:14px;margin:18px 0}}
+.btn{{
+  appearance:none;border:2px solid #38f5ff;border-radius:10px;padding:15px 12px;
+  width:100%;font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;color:#eaffff;
+  cursor:pointer;background:linear-gradient(180deg,rgba(17,72,103,.95),rgba(10,33,62,.98));
+  box-shadow:0 0 9px rgba(0,238,255,.75),inset 0 0 16px rgba(0,238,255,.12),0 5px 0 rgba(255,0,204,.35);
+  transition:.18s transform,.18s filter;
+}}
+.btn:hover{{filter:brightness(1.25);transform:translateY(-2px)}}
+.btn:active{{transform:translateY(1px)}}
+.icon{{margin:0 7px}}
+.players{{
+  display:none;border-radius:0 0 18px 18px;background:#101b28;
+  margin-top:-14px;padding:22px 12px 18px;text-align:center;
+  box-shadow:0 8px 18px rgba(0,0,0,.35);font-size:18px
+}}
+.players button{{
+  display:block;width:100%;border:0;background:none;color:#f0f5ff;
+  font:inherit;padding:8px;cursor:pointer
+}}
+.players button:hover{{color:#56efff}}
+.info{{
+  margin-top:14px;padding:16px 4px 8px;font-size:16px;line-height:2;
+  color:#e7f4ff
+}}
+.info div{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.info b{{font-weight:500}}
+.status{{font-size:13px;color:#8edfff;text-align:center;margin-top:8px;opacity:.8}}
+@media(max-width:480px){{
+  .page{{padding-left:9px;padding-right:9px}}
+  .frame{{padding:9px}}
+  .play{{width:95px;height:68px;line-height:64px;font-size:34px}}
+  .info{{font-size:14px}}
+}}
 </style>
 """
 
 # ============================================================
-# HOME
+# WEB ROUTES
 # ============================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>STUDY PROXY</title>
-        {CYBERPUNK_CSS}
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+        <title>STADY-PROXY</title>
+        {STADY_CSS}
     </head>
     <body>
-        <h1 class="logo">STUDY-PROXY</h1>
-        <div class="main-container" style="text-align:center;">
-            <h2 style="color:#ff00ff; font-family:'Orbitron', sans-serif;">🚀 SERVER ONLINE</h2>
-            <p style="font-size: 18px; color: #fff;">Send files to the Telegram Bot to generate streaming links.</p>
-            <div class="player-box" style="padding: 20px; font-weight: bold; background: rgba(0,243,255,0.05); border-color:#00f3ff; color: #00f3ff; font-family: 'Orbitron', sans-serif;">
-                HIGH SPEED • SECURE • NO LOGS
-            </div>
-        </div>
+        <main class="page">
+            <div class="brand">STADY-PROXY</div>
+            <div class="status" style="font-size: 20px; margin-top: 50px;">SERVER ONLINE 🚀</div>
+        </main>
     </body>
     </html>
     """
-
-# ============================================================
-# WATCH PAGE
-# ============================================================
 
 @app.get("/watch/{token}", response_class=HTMLResponse)
 async def watch(token):
@@ -455,11 +366,11 @@ async def watch(token):
     safe_name = html.escape(filename)
     encoded_filename = quote(filename, safe="")
 
-    # Core URLS
+    # Generates exact URLs based on DB
     full_stream_url = f"{PUBLIC_URL}/{token}/{encoded_filename}?action=stream"
     full_download_url = f"{PUBLIC_URL}/{token}/{encoded_filename}?action=download"
 
-    # Convert sizes
+    # Convert size format matching your UI
     file_size = int(row["size"])
     if file_size >= 1024 * 1024 * 1024:
         size_str = f"{file_size / (1024 * 1024 * 1024):.2f} GB"
@@ -468,107 +379,106 @@ async def watch(token):
     else:
         size_str = f"{file_size / 1024:.2f} KB"
 
-    mime = row["mime"]
+    # Current Live Date mapping
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Player HTML
-    if mime.startswith("video/"):
-        player = f"""
-        <video controls playsinline preload="metadata">
-            <source src="{full_stream_url}" type="{html.escape(mime)}">
-            Your browser does not support this video format.
-        </video>"""
-    elif mime.startswith("audio/"):
-        player = f"""
-        <audio controls preload="metadata" style="margin-top: 10px; margin-bottom: 10px;">
-            <source src="{full_stream_url}" type="{html.escape(mime)}">
-            Your browser does not support this audio format.
-        </audio>"""
-    else:
-        player = f"""
-        <div style="padding: 30px; text-align: center; color: #ff00ff; font-family: 'Orbitron', sans-serif;">
-            ⚠️ FILE CANNOT BE STREAMED<br><br><span style="font-size:14px; color:#fff;">Please use the download button below.</span>
-        </div>"""
-
-    # Android Intents for External Players
-    # Removing http/https for scheme processing
+    # Android Intents config
     stream_no_scheme = full_stream_url.replace("https://", "").replace("http://", "")
     scheme = "https" if "https://" in full_stream_url else "http"
 
-    mx_intent = f"intent://{stream_no_scheme}#Intent;scheme={scheme};package=com.mxtech.videoplayer.ad;type=video/*;end;"
-    vlc_intent = f"intent://{stream_no_scheme}#Intent;scheme={scheme};package=org.videolan.vlc;type=video/*;end;"
-    playit_intent = f"intent://{stream_no_scheme}#Intent;scheme={scheme};package=com.playit.videoplayer;type=video/*;end;"
-
     return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>{safe_name}</title>
-        {CYBERPUNK_CSS}
-    </head>
-    <body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>STADY-PROXY | {safe_name}</title>
+{STADY_CSS}
+</head>
+<body>
+<main class="page">
+  <div class="brand">STADY-PROXY</div>
 
-        <h1 class="logo">STUDY-PROXY</h1>
+  <section class="frame">
+    <div class="poster">
+      <img id="poster" src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85" alt="Video thumbnail">
+      <button class="play" aria-label="Play" onclick="stream()">▶</button>
+    </div>
 
-        <div class="main-container">
+    <div class="actions">
+      <button class="btn" onclick="downloadFile()">☁️ Download ☁️</button>
+      <button class="btn" onclick="togglePlayers()">⏵ Stream ⏵</button>
 
-            <!-- Video Player Box -->
-            <div class="player-box">
-                {player}
-            </div>
+      <div class="players" id="players">
+        <button onclick="openPlayer('mx')">MX Player</button>
+        <button onclick="openPlayer('vlc')">VLC Mobile</button>
+        <button onclick="openPlayer('playit')">PlayIt</button>
+        <button onclick="openPlayer('splayer')">SPlayer</button>
+        <button onclick="openPlayer('jplayer')">JPlayer</button>
+        <button onclick="openPlayer('kmplayer')">KMPlayer</button>
+        <button onclick="openPlayer('hdplayer')">HDPlayer</button>
+        <button onclick="openPlayer('nplayer')">nPlayer</button>
+      </div>
 
-            <!-- Download Button -->
-            <a href="{full_download_url}" class="btn btn-cyan">
-                <span style="margin-right:10px; font-size:18px;">☁️</span> DOWNLOAD FILE
-            </a>
+      <button class="btn" onclick="telegramDownload()">✈️ Telegram Download ✈️</button>
+    </div>
 
-            <!-- MX Player Button -->
-            <a href="{mx_intent}" class="btn btn-magenta">
-                <span style="margin-right:10px; font-size:18px;">▶️</span> PLAY IN MX PLAYER
-            </a>
+    <div class="info">
+      <div>📄 <b>File Name:</b> <span id="fileName">{safe_name}</span></div>
+      <div>☰ <b>File Size:</b> <span id="fileSize">{size_str}</span></div>
+      <div>👤 <b>File Owner:</b> <span id="owner">Admin</span></div>
+      <div>◷ <b>Created Time:</b> <span id="created">{current_time}</span></div>
+    </div>
+  </section>
 
-            <!-- VLC Button -->
-            <a href="{vlc_intent}" class="btn btn-magenta">
-                <span style="margin-right:10px; font-size:18px;">▶️</span> PLAY IN VLC
-            </a>
+  <div class="status" id="status">STADY-PROXY • READY</div>
+</main>
 
-            <!-- PLAYit Button -->
-            <a href="{playit_intent}" class="btn btn-magenta">
-                <span style="margin-right:10px; font-size:18px;">▶️</span> PLAY IN PLAYit
-            </a>
+<script>
+const CONFIG = {{
+  downloadUrl: "{full_download_url}",
+  streamUrl: "{full_stream_url}",
+  telegramUrl: "https://t.me/{BOT_USERNAME}" 
+}};
 
-            <!-- File Info Box -->
-            <div class="info-box">
-                <div class="info-row">
-                    <span class="info-icon">📄</span>
-                    <span class="info-label">File Name:</span>
-                    <span class="info-value">{safe_name}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-icon">🗜️</span>
-                    <span class="info-label">File Size:</span>
-                    <span class="info-value">{size_gb}</span>
-                    <div class="eq-bars">
-                        <div class="eq-bar" style="animation-delay: 0.1s;"></div>
-                        <div class="eq-bar" style="animation-delay: 0.3s;"></div>
-                        <div class="eq-bar" style="animation-delay: 0.0s;"></div>
-                        <div class="eq-bar" style="animation-delay: 0.4s;"></div>
-                        <div class="eq-bar" style="animation-delay: 0.2s;"></div>
-                    </div>
-                </div>
-                <div class="info-row">
-                    <span class="info-icon">👤</span>
-                    <span class="info-label">File Owner:</span>
-                    <span class="info-value">Admin</span>
-                </div>
-            </div>
+function setStatus(text){{document.getElementById('status').textContent=text}}
 
-        </div>
-
-    </body>
-    </html>
-    """
+function downloadFile(){{
+  if(!CONFIG.downloadUrl){{setStatus("Download URL not configured");return}}
+  location.href=CONFIG.downloadUrl
+}}
+function telegramDownload(){{
+  if(!CONFIG.telegramUrl){{setStatus("Telegram URL not configured");return}}
+  location.href=CONFIG.telegramUrl
+}}
+function stream(){{
+  if(!CONFIG.streamUrl){{setStatus("Stream URL not configured");togglePlayers();return}}
+  location.href=CONFIG.streamUrl
+}}
+function togglePlayers(){{
+  const p=document.getElementById('players')
+  p.style.display=p.style.display==="block"?"none":"block"
+}}
+function openPlayer(player){{
+  if(!CONFIG.streamUrl){{setStatus(player.toUpperCase()+" selected • Stream URL not configured");return}}
+  
+  const streamNoScheme = "{stream_no_scheme}";
+  const scheme = "{scheme}";
+  let intentUrl = CONFIG.streamUrl;
+  
+  if(player === 'mx') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=com.mxtech.videoplayer.ad;type=video/*;end;";
+  else if(player === 'vlc') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=org.videolan.vlc;type=video/*;end;";
+  else if(player === 'playit') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=com.playit.videoplayer;type=video/*;end;";
+  else if(player === 'splayer') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=com.kmplayer;type=video/*;end;";
+  else if(player === 'kmplayer') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=com.kmplayer;type=video/*;end;";
+  else if(player === 'nplayer') intentUrl = "intent://" + streamNoScheme + "#Intent;scheme=" + scheme + ";package=com.newin.nplayer.pro;type=video/*;end;";
+  
+  location.href = intentUrl;
+}}
+</script>
+</body>
+</html>
+"""
 
 # ============================================================
 # DIRECT TELEGRAM PROXY (DO NOT EDIT)
@@ -646,18 +556,19 @@ async def direct_proxy(token: str, filename: str, request: Request, action: str 
 # ============================================================
 
 async def main():
+    global BOT_USERNAME
     init_database()
     print()
     print("=" * 65)
-    print("          TELEGRAM DIRECT PROXY SERVER (CYBERPUNK THEME)")
+    print("          TELEGRAM DIRECT PROXY SERVER (STADY-PROXY THEME)")
     print("=" * 65)
 
     print("\n[+] Connecting to Telegram...")
     await bot.start(bot_token=BOT_TOKEN)
     me = await bot.get_me()
-    username = f"@{me.username}" if me.username else str(me.id)
+    BOT_USERNAME = me.username if me.username else str(me.id)
 
-    print(f"[+] Telegram connected\n[+] Bot: {username}")
+    print(f"[+] Telegram connected\n[+] Bot: @{BOT_USERNAME}")
     print(f"\n[+] Public URL:\n{PUBLIC_URL}")
     print(f"\n[+] Local URL:\nhttp://127.0.0.1:{PORT}")
     print("\n[+] Server ready")
@@ -677,4 +588,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[+] Server stopped.")
-
