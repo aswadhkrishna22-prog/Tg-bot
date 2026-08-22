@@ -300,9 +300,74 @@ def get_user_files(user_id):
             ).fetchall()
 
     except sqlite3.Error as error:
+# ============================================================
+# STADY-PROXY FILE DATABASE — NEON POSTGRESQL
+# ============================================================
+
+def get_proxy_users():
+
+    try:
+
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require",
+            cursor_factory=RealDictCursor
+        ) as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute("""
+                    SELECT
+                        chat_id,
+                        COUNT(*) AS file_count
+                    FROM files
+                    GROUP BY chat_id
+                    ORDER BY file_count DESC
+                """)
+
+                return cursor.fetchall()
+
+    except Exception as error:
 
         print(
-            "[SECURITY] files.db error:",
+            "[SECURITY] PostgreSQL users error:",
+            error
+        )
+
+        return []
+
+
+def get_user_files(user_id):
+
+    try:
+
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require",
+            cursor_factory=RealDictCursor
+        ) as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute("""
+                    SELECT
+                        token,
+                        filename,
+                        size,
+                        mime
+                    FROM files
+                    WHERE chat_id = %s
+                    ORDER BY token DESC
+                """, (
+                    int(user_id),
+                ))
+
+                return cursor.fetchall()
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] PostgreSQL files error:",
             error
         )
 
@@ -311,36 +376,57 @@ def get_user_files(user_id):
 
 def purge_user_files(user_id):
 
-    if not files_db_exists():
-        return 0
-
     try:
 
-        with sqlite3.connect(
-            FILES_DATABASE,
-            timeout=30
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require"
         ) as db:
 
-            result = db.execute(
-                """
-                DELETE FROM files
-                WHERE chat_id = ?
-                """,
-                (int(user_id),)
-            )
+            with db.cursor() as cursor:
+
+                cursor.execute("""
+                    DELETE FROM files
+                    WHERE chat_id = %s
+                """, (
+                    int(user_id),
+                ))
+
+                removed = cursor.rowcount
 
             db.commit()
 
-            return result.rowcount
+            return removed
 
-    except sqlite3.Error as error:
+    except Exception as error:
 
         print(
-            "[SECURITY] purge error:",
+            "[SECURITY] PostgreSQL purge error:",
             error
         )
 
         return 0
+
+
+def purge_all_blocked_users():
+
+    blocked = get_blocked_users()
+
+    total_removed = 0
+
+    for row in blocked:
+
+        user_id = int(
+            row["user_id"]
+        )
+
+        removed = purge_user_files(
+            user_id
+        )
+
+        total_removed += removed
+
+    return total_removed
 # ============================================================
 # STADY-PROXY FILE DATABASE — NEON POSTGRESQL
 # ============================================================
