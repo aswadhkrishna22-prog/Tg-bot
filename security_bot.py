@@ -1,7 +1,8 @@
 import asyncio
 import os
-import sqlite3
+import psycopg2
 import html
+from psycopg2.extras import RealDictCursor
 from pathlib import Path
 from datetime import datetime
 
