@@ -130,7 +130,6 @@ def add_file(
     size,
     mime
 ):
-
     with db_connect() as db:
 
         with db.cursor() as cursor:
@@ -143,9 +142,18 @@ def add_file(
                     message_id,
                     filename,
                     size,
-                    mime
+                    mime,
+                    expires_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    NOW() + INTERVAL '12 hours'
+                )
             """, (
                 token,
                 chat_id,
