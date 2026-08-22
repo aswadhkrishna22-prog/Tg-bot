@@ -3,10 +3,11 @@ import html
 import mimetypes
 import os
 import re
-import sqlite3
+import psycopg2
 import uuid
 import time
 import psutil
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
