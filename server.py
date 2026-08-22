@@ -209,8 +209,7 @@ async def stats_command(event):
             f"<code>{html.escape(str(LAST_ERROR))}</code>\n\n"
 
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>',
-    parse_mode="html"
+            '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>'
         )
 
         await event.reply(
@@ -373,42 +372,42 @@ async def receive_file(event):
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
-
     await event.reply(
-    "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-    "        ⚡ STADY-PROXY\n"
-    "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "        ⚡ STADY-PROXY\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
 
-    "🎬 FILE → STREAM → DOWNLOAD\n\n"
+        "🎬 FILE → STREAM → DOWNLOAD\n\n"
 
-    "Send me any video or file and\n"
-    "I'll instantly create a browser\n"
-    "streaming & download link for you.\n\n"
+        "Send me any video or file and\n"
+        "I'll instantly create a browser\n"
+        "streaming & download link for you.\n\n"
 
-    "✨ FEATURES\n\n"
+        "✨ FEATURES\n\n"
 
-    "▶️ Fast Browser Streaming\n"
-    "☁️ Direct Download\n"
-    "📱 Mobile Friendly\n"
-    "🔗 Easy Link Sharing\n"
-    "📦 Supports MP4, MKV, MP3, APK,\n"
-    "   ZIP, PDF & many more formats\n\n"
+        "▶️ Fast Browser Streaming\n"
+        "☁️ Direct Download\n"
+        "📱 Mobile Friendly\n"
+        "🔗 Easy Link Sharing\n"
+        "📦 Supports MP4, MKV, MP3, APK,\n"
+        "   ZIP, PDF & many more formats\n\n"
 
-    "⏳ 12-HOUR LINK\n"
-    "Your generated link stays active\n"
-    "for 12 hours only.\n\n"
+        "⏳ 12-HOUR LINK\n"
+        "Your generated link stays active\n"
+        "for 12 hours only.\n\n"
 
-    "🗑️ AUTO CLEANUP\n"
-    "Generated bot messages are\n"
-    "automatically deleted after 12 hours.\n\n"
+        "🗑️ AUTO CLEANUP\n"
+        "Generated bot messages are\n"
+        "automatically deleted after 12 hours.\n\n"
 
-    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-    "📤 Send your file to get started.\n\n"
+        "📤 Send your file to get started.\n\n"
 
-    '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>',
-    parse_mode="html"
-)
+        '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>',
+        parse_mode="html"
+    )
+
 # ============================================================
 # STADY-PROXY THEME
 # IMPORTANT:
