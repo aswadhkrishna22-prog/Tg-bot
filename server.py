@@ -39,7 +39,6 @@ HOST = "0.0.0.0"
 PORT = 8000
 CHUNK_SIZE = 512 * 1024
 
-# 12 hour expiry
 LINK_TTL_HOURS = 12
 
 BOT_USERNAME = ""
@@ -87,10 +86,6 @@ def init_database():
             reply_message_id INTEGER
         )
         """)
-
-        # ----------------------------------------------------
-        # Migrate old files.db if necessary
-        # ----------------------------------------------------
 
         columns = {
             row["name"]
@@ -407,10 +402,6 @@ async def expire_file_later(
     if not is_expired(row):
         return
 
-    # --------------------------------------------------------
-    # DELETE ONLY BOT'S GENERATED REPLY
-    # --------------------------------------------------------
-
     try:
 
         reply_chat_id = row[
@@ -442,10 +433,6 @@ async def expire_file_later(
             "[!] Could not delete bot reply:",
             error
         )
-
-    # --------------------------------------------------------
-    # DELETE DATABASE RECORD
-    # --------------------------------------------------------
 
     delete_file_record(token)
 
@@ -527,7 +514,6 @@ async def cleanup_loop():
                 error
             )
 
-        # Check every 5 minutes
         await asyncio.sleep(300)
 
 
@@ -542,10 +528,6 @@ async def receive_file(event):
         return
 
     try:
-
-        # ----------------------------------------------------
-        # Filename
-        # ----------------------------------------------------
 
         filename = event.file.name
 
@@ -569,10 +551,6 @@ async def receive_file(event):
             filename
         )
 
-        # ----------------------------------------------------
-        # File info
-        # ----------------------------------------------------
-
         size = int(
             event.file.size or 0
         )
@@ -581,10 +559,6 @@ async def receive_file(event):
             event.file.mime_type
             or get_mime(filename)
         )
-
-        # ----------------------------------------------------
-        # Telegram source
-        # ----------------------------------------------------
 
         token = uuid.uuid4().hex
 
@@ -596,20 +570,12 @@ async def receive_file(event):
             event.id
         )
 
-        # ----------------------------------------------------
-        # 12 HOUR EXPIRY
-        # ----------------------------------------------------
-
         expires_at = (
             datetime.now(timezone.utc)
             + timedelta(
                 hours=LINK_TTL_HOURS
             )
         )
-
-        # ----------------------------------------------------
-        # Database
-        # ----------------------------------------------------
 
         add_file(
             token,
@@ -620,10 +586,6 @@ async def receive_file(event):
             mime,
             expires_at.isoformat()
         )
-
-        # ----------------------------------------------------
-        # URLs
-        # ----------------------------------------------------
 
         stream_url = (
             f"{PUBLIC_URL}/watch/{token}"
@@ -642,10 +604,6 @@ async def receive_file(event):
             / 1024
             / 1024
         )
-
-        # ----------------------------------------------------
-        # LOG
-        # ----------------------------------------------------
 
         print("\n" + "=" * 60)
 
@@ -684,10 +642,6 @@ async def receive_file(event):
 
         print("=" * 60)
 
-        # ----------------------------------------------------
-        # INLINE BUTTONS
-        # ----------------------------------------------------
-
         buttons = [
             [
                 Button.url(
@@ -702,10 +656,6 @@ async def receive_file(event):
                 )
             ]
         ]
-
-        # ----------------------------------------------------
-        # TELEGRAM MESSAGE
-        # ----------------------------------------------------
 
         reply = await event.reply(
 
@@ -726,19 +676,11 @@ async def receive_file(event):
             buttons=buttons
         )
 
-        # ----------------------------------------------------
-        # Save generated bot reply ID
-        # ----------------------------------------------------
-
         set_reply_message(
             token,
             int(reply.chat_id),
             int(reply.id)
         )
-
-        # ----------------------------------------------------
-        # Schedule 12 hour deletion
-        # ----------------------------------------------------
 
         asyncio.create_task(
             expire_file_later(
@@ -778,14 +720,43 @@ async def receive_file(event):
 async def start_command(event):
 
     await event.reply(
+        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+        "        ⚡ STADY-PROXY\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
 
-        "👋 STADY-PROXY\n\n"
+        "🎬 FILE → STREAM → DOWNLOAD\n\n"
 
-        "Send me a video/file and I will "
-        "create a browser streaming link.\n\n"
+        "Send me any video or file and\n"
+        "I'll instantly create a browser\n"
+        "streaming & download link for you.\n\n"
 
-        "⏳ Links are valid for 12 hours."
+        "✨ FEATURES\n\n"
 
+        "▶️ Fast Browser Streaming\n"
+        "☁️ Direct Download\n"
+        "📱 Mobile Friendly\n"
+        "🔗 Easy Link Sharing\n"
+        "📦 Supports MP4, MKV, MP3, APK,\n"
+        "   ZIP, PDF & many more formats\n\n"
+
+        "⏳ 12-HOUR LINK\n"
+        "Your generated link stays active\n"
+        "for 12 hours only.\n\n"
+
+        "🗑️ AUTO CLEANUP\n"
+        "Generated bot messages are\n"
+        "automatically deleted after 12 hours.\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        "📤 Send your file to get started.\n\n"
+
+        '❤️ Made with '
+        '<a href="https://www.instagram.com/2aswadhh_._kr">'
+        'aswadh_kr'
+        '</a>',
+
+        parse_mode="html"
     )
 
 
@@ -1114,9 +1085,9 @@ async def home():
 <meta charset="UTF-8">
 
 <meta
-    name="viewport"
-    content="width=device-width,
-    initial-scale=1.0"
+name="viewport"
+content="width=device-width,
+initial-scale=1.0"
 >
 
 <title>STADY-PROXY</title>
@@ -1139,11 +1110,7 @@ STADY-PROXY
 
 <img
 src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-style="
-width:100%;
-height:100%;
-object-fit:cover;
-"
+style="width:100%;height:100%;object-fit:cover;"
 >
 
 </div>
@@ -1181,10 +1148,6 @@ async def watch(token):
             status_code=404,
             detail="File not found"
         )
-
-    # --------------------------------------------------------
-    # 12 hour expiry check
-    # --------------------------------------------------------
 
     if is_expired(row):
 
@@ -1333,7 +1296,6 @@ Try Download or an external video player.
 
 </div>
 
-
 <div class="actions">
 
 <button
@@ -1398,43 +1360,36 @@ onclick="telegramDownload()"
 
 </div>
 
-
 <div class="info">
 
 <div>
-📄
-<b>File Name:</b>
+📄 <b>File Name:</b>
 <span>{safe_name}</span>
 </div>
 
 <div>
-☰
-<b>File Size:</b>
+☰ <b>File Size:</b>
 <span>{size_str}</span>
 </div>
 
 <div>
-👤
-<b>File Owner:</b>
+👤 <b>File Owner:</b>
 <span>STADY-PROXY</span>
 </div>
 
 <div>
-◷
-<b>Created Time:</b>
+◷ <b>Created Time:</b>
 <span>{created}</span>
 </div>
 
 <div>
-⏳
-<b>Link Validity:</b>
+⏳ <b>Link Validity:</b>
 <span>12 Hours</span>
 </div>
 
 </div>
 
 </section>
-
 
 <!-- =====================================================
      INSTAGRAM CREDIT
@@ -1492,7 +1447,6 @@ aswadh_kr
 
 </div>
 
-
 <div
 class="status"
 id="status"
@@ -1501,7 +1455,6 @@ STADY-PROXY • READY
 </div>
 
 </main>
-
 
 <script>
 
@@ -1513,7 +1466,6 @@ const DOWNLOAD_URL =
 
 const BOT_USERNAME =
 {BOT_USERNAME!r};
-
 
 const videoPlayer =
 document.getElementById(
@@ -1530,7 +1482,6 @@ document.getElementById(
 "videoError"
 );
 
-
 function setStatus(text) {{
 
 document
@@ -1538,7 +1489,6 @@ document
 .textContent = text;
 
 }}
-
 
 async function playVideo() {{
 
@@ -1575,7 +1525,6 @@ setStatus(
 
 }}
 
-
 videoPlayer.addEventListener(
 "play",
 function() {{
@@ -1590,7 +1539,6 @@ setStatus(
 
 }}
 );
-
 
 videoPlayer.addEventListener(
 "pause",
@@ -1611,7 +1559,6 @@ setStatus(
 }}
 );
 
-
 videoPlayer.addEventListener(
 "ended",
 function() {{
@@ -1627,7 +1574,6 @@ setStatus(
 }}
 );
 
-
 videoPlayer.addEventListener(
 "error",
 function() {{
@@ -1642,14 +1588,12 @@ setStatus(
 }}
 );
 
-
 function downloadFile() {{
 
 location.href =
 DOWNLOAD_URL;
 
 }}
-
 
 function stream() {{
 
@@ -1661,7 +1605,6 @@ block:"center"
 playVideo();
 
 }}
-
 
 function togglePlayers() {{
 
@@ -1676,7 +1619,6 @@ players.style.display === "block"
 : "block";
 
 }}
-
 
 function telegramDownload() {{
 
@@ -1696,7 +1638,6 @@ location.href =
 BOT_USERNAME;
 
 }}
-
 
 function openPlayer(player) {{
 
@@ -1813,10 +1754,6 @@ async def direct_proxy(
             detail="File not found"
         )
 
-    # --------------------------------------------------------
-    # 12 hour expiry
-    # --------------------------------------------------------
-
     if is_expired(row):
 
         delete_file_record(token)
@@ -1877,10 +1814,6 @@ async def direct_proxy(
 
     mime = row["mime"]
 
-    # ========================================================
-    # DOWNLOAD
-    # ========================================================
-
     if action.lower() == "download":
 
         async def download_generator():
@@ -1917,10 +1850,6 @@ async def direct_proxy(
             media_type=mime,
             headers=headers
         )
-
-    # ========================================================
-    # STREAM
-    # ========================================================
 
     range_header = request.headers.get(
         "range"
@@ -2064,15 +1993,7 @@ async def main():
 
     print("=" * 65)
 
-    # --------------------------------------------------------
-    # Cleanup expired records after Render restart
-    # --------------------------------------------------------
-
     await cleanup_expired_files()
-
-    # --------------------------------------------------------
-    # Background cleanup
-    # --------------------------------------------------------
 
     cleanup_task = asyncio.create_task(
         cleanup_loop()
@@ -2100,6 +2021,7 @@ async def main():
 
         try:
             await cleanup_task
+
         except asyncio.CancelledError:
             pass
 
@@ -2126,4 +2048,4 @@ if __name__ == "__main__":
 
         print(
             "\n[+] Server stopped."
-                  )
+        )
