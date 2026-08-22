@@ -315,19 +315,17 @@ def purge_user_files(user_id):
 
     try:
 
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require"
-        ) as db:
+        with files_pg_db() as db:
 
             with db.cursor() as cursor:
 
-                cursor.execute("""
+                cursor.execute(
+                    """
                     DELETE FROM files
                     WHERE chat_id = %s
-                """, (
-                    int(user_id),
-                ))
+                    """,
+                    (int(user_id),)
+                )
 
                 removed = cursor.rowcount
 
@@ -343,7 +341,6 @@ def purge_user_files(user_id):
         )
 
         return 0
-
 
 def purge_all_blocked_users():
 
