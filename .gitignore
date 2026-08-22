@@ -16,3 +16,4 @@ files/
 *.before-security
 *.before-conflict-fix
 server_backup.py
+security_bot.log
