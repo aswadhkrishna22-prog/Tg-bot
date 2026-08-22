@@ -62,15 +62,6 @@ if not DATABASE_URL:
 # STADY-PROXY POSTGRESQL
 # ============================================================
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    ""
-).strip()
-
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL is missing"
-    )
 
 
 def files_pg_db():
