@@ -177,8 +177,10 @@ async def stats_command(event):
         db_status = "✅ ONLINE"
 
         try:
-            with db_connect() as db:
-                db.execute("SELECT 1").fetchone()
+    with db_connect() as db:
+        with db.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
 
         except Exception as error:
             db_status = (
@@ -199,16 +201,20 @@ async def stats_command(event):
         total_files = 0
 
         try:
-            with db_connect() as db:
+    with db_connect() as db:
 
-                result = db.execute(
-                    "SELECT COUNT(*) AS total FROM files"
-                ).fetchone()
+        with db.cursor() as cursor:
 
-                total_files = int(result["total"])
+            cursor.execute(
+                "SELECT COUNT(*) AS total FROM files"
+            )
 
-        except Exception:
-            total_files = 0
+            result = cursor.fetchone()
+
+            total_files = int(result["total"])
+
+except Exception:
+    total_files = 0
 
         message = (
             "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
