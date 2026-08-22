@@ -256,11 +256,7 @@ def get_proxy_users():
 
     try:
 
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            cursor_factory=RealDictCursor
-        ) as db:
+        with files_pg_db() as db:
 
             with db.cursor() as cursor:
 
@@ -279,43 +275,6 @@ def get_proxy_users():
 
         print(
             "[SECURITY] PostgreSQL users error:",
-            error
-        )
-
-        return []
-
-
-def get_user_files(user_id):
-
-    try:
-
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            cursor_factory=RealDictCursor
-        ) as db:
-
-            with db.cursor() as cursor:
-
-                cursor.execute("""
-                    SELECT
-                        token,
-                        filename,
-                        size,
-                        mime
-                    FROM files
-                    WHERE chat_id = %s
-                    ORDER BY token DESC
-                """, (
-                    int(user_id),
-                ))
-
-                return cursor.fetchall()
-
-    except Exception as error:
-
-        print(
-            "[SECURITY] PostgreSQL files error:",
             error
         )
 
