@@ -56,30 +56,46 @@ if not BOT_TOKEN:
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = BASE_DIR / "files.db"
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    ""
+).strip()
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is missing"
+    )
 
 
 def db_connect():
-    connection = sqlite3.connect(
-        DATABASE,
-        timeout=30
+
+    connection = psycopg2.connect(
+        DATABASE_URL,
+        sslmode="require",
+        cursor_factory=RealDictCursor
     )
-    connection.row_factory = sqlite3.Row
+
     return connection
 
 
 def init_database():
+
     with db_connect() as db:
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS files (
-                token TEXT PRIMARY KEY,
-                chat_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                filename TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                mime TEXT NOT NULL
-            )
-        """)
+
+        with db.cursor() as cursor:
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS files (
+                    token TEXT PRIMARY KEY,
+                    chat_id BIGINT NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    filename TEXT NOT NULL,
+                    size BIGINT NOT NULL,
+                    mime TEXT NOT NULL
+                )
+            """)
+
         db.commit()
 
 
@@ -91,28 +107,56 @@ def add_file(
     size,
     mime
 ):
+
     with db_connect() as db:
-        db.execute("""
-            INSERT INTO files
-            (token, chat_id, message_id, filename, size, mime)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            token,
-            chat_id,
-            message_id,
-            filename,
-            size,
-            mime
-        ))
+
+        with db.cursor() as cursor:
+
+            cursor.execute("""
+                INSERT INTO files
+                (
+                    token,
+                    chat_id,
+                    message_id,
+                    filename,
+                    size,
+                    mime
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                token,
+                chat_id,
+                message_id,
+                filename,
+                size,
+                mime
+            ))
+
         db.commit()
 
 
 def get_file(token):
+
     with db_connect() as db:
-        return db.execute(
-            "SELECT * FROM files WHERE token = ?",
-            (token,)
-        ).fetchone()
+
+        with db.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    token,
+                    chat_id,
+                    message_id,
+                    filename,
+                    size,
+                    mime
+                FROM files
+                WHERE token = %s
+                """,
+                (token,)
+            )
+
+            return cursor.fetchone()
 
 
 # ============================================================
