@@ -59,7 +59,27 @@ if not DATABASE_URL:
     raise RuntimeError(
         "DATABASE_URL is missing"
     )
+ # ============================================================
+# STADY-PROXY POSTGRESQL
+# ============================================================
 
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    ""
+).strip()
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is missing"
+    )
+
+
+def files_pg_db():
+
+    return psycopg.connect(
+        DATABASE_URL,
+        row_factory=psycopg.rows.dict_row
+    )
 # ============================================================
 # TELEGRAM
 # ============================================================
