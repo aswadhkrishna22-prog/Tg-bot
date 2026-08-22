@@ -93,8 +93,30 @@ def init_database():
                     message_id BIGINT NOT NULL,
                     filename TEXT NOT NULL,
                     size BIGINT NOT NULL,
-                    mime TEXT NOT NULL
+                    mime TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ
                 )
+            """)
+
+            cursor.execute("""
+                ALTER TABLE files
+                ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+            """)
+
+            cursor.execute("""
+                UPDATE files
+                SET expires_at = NOW() + INTERVAL '12 hours'
+                WHERE expires_at IS NULL
+            """)
+
+            cursor.execute("""
+                ALTER TABLE files
+                ADD COLUMN IF NOT EXISTS bot_chat_id BIGINT
+            """)
+
+            cursor.execute("""
+                ALTER TABLE files
+                ADD COLUMN IF NOT EXISTS bot_message_id BIGINT
             """)
 
         db.commit()
