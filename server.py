@@ -164,7 +164,29 @@ def add_file(
             ))
 
         db.commit()
+        
+def save_bot_message_id(
+    token,
+    bot_chat_id,
+    bot_message_id
+):
+    with db_connect() as db:
 
+        with db.cursor() as cursor:
+
+            cursor.execute("""
+                UPDATE files
+                SET
+                    bot_chat_id = %s,
+                    bot_message_id = %s
+                WHERE token = %s
+            """, (
+                int(bot_chat_id),
+                int(bot_message_id),
+                token
+            ))
+
+        db.commit()
 
 def get_file(token):
 
