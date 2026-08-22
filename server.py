@@ -344,6 +344,8 @@ async def receive_file(event):
         )
 
         stream_url = f"{PUBLIC_URL}/watch/{token}"
+        download_url = f"{PUBLIC_URL}/download/{token}"
+
         size_gb = size / 1024 / 1024 / 1024
 
         print("\n" + "=" * 60)
@@ -353,11 +355,28 @@ async def receive_file(event):
         print("[+] Token:", token)
         print("=" * 60)
 
+        from telethon import Button
+
+        buttons = [
+            [
+                Button.url(
+                    "⚡ FAST DOWNLOAD",
+                    download_url
+                ),
+                Button.url(
+                    "▶️ WATCH / STREAM",
+                    stream_url
+                )
+            ]
+        ]
+
         await event.reply(
-            "✅ STADY-PROXY file ready!\n\n"
-            f"🎬 {filename}\n"
-            f"📦 Size: {size_gb:.2f} GB\n\n"
-            f"▶️ Watch / Stream:\n{stream_url}"
+            "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
+            f"🎬 <b>{html.escape(filename)}</b>\n"
+            f"📦 Size: <code>{size_gb:.2f} GB</code>\n\n"
+            "Choose an option below:",
+            buttons=buttons,
+            parse_mode="html"
         )
 
     except Exception as error:
@@ -365,7 +384,9 @@ async def receive_file(event):
 
         try:
             await event.reply(
-                f"❌ Could not create stream link.\n\n{error}"
+                "❌ <b>Could not create file link.</b>\n\n"
+                f"<code>{html.escape(str(error))}</code>",
+                parse_mode="html"
             )
         except Exception:
             pass
