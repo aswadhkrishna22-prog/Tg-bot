@@ -157,7 +157,8 @@ async def stats_command(event):
                     # Skip items we can't access
                     continue
 
-            storage_items.sort(reverse=True)
+            # sort by size descending
+            storage_items.sort(key=lambda x: x[0], reverse=True)
             storage_items = storage_items[:8]
 
         except Exception:
@@ -165,7 +166,7 @@ async def stats_command(event):
 
         if storage_items:
             storage_text = "\n".join(
-                f"📁 {name}: <code>{size / 1024**3:.2f} GB</code>"
+                f"📁 {html.escape(name)}: <code>{size / 1024**3:.2f} GB</code>"
                 for size, name in storage_items
             )
         else:
@@ -533,23 +534,6 @@ body:before{
         0 0 8px #00eaff,
         0 0 22px #7c28ff,
         0 0 40px #ff18d5;
-}
-
-.frame{
-    position:relative;
-    padding:12px;
-    border:2px solid #42eaff;
-    border-radius:15px;
-    background:
-        linear-gradient(
-            145deg,
-            rgba(12,43,72,.9),
-            rgba(4,13,28,.94)
-        );
-    box-shadow:
-        0 0 10px #00eaff,
-        inset 0 0 20px rgba(0,234,255,.15),
-        0 0 30px rgba(255,0,213,.2);
 }
 
 # (file continues unchanged)
