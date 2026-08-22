@@ -344,7 +344,6 @@ async def receive_file(event):
         )
 
         stream_url = f"{PUBLIC_URL}/watch/{token}"
-        download_url = f"{PUBLIC_URL}/download/{token}"
 
         size_gb = size / 1024 / 1024 / 1024
 
@@ -359,10 +358,6 @@ async def receive_file(event):
 
         buttons = [
             [
-                Button.url(
-                    "⚡ FAST DOWNLOAD",
-                    download_url
-                ),
                 Button.url(
                     "▶️ WATCH / STREAM",
                     stream_url
