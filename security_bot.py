@@ -48,8 +48,16 @@ if OWNER_ID <= 0:
 BASE_DIR = Path(__file__).resolve().parent
 
 SECURITY_DATABASE = BASE_DIR / "security.db"
-FILES_DATABASE = BASE_DIR / "files.db"
 
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    ""
+).strip()
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is missing"
+    )
 
 # ============================================================
 # TELEGRAM
