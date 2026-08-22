@@ -618,21 +618,21 @@ async def receive_file(event):
             ]
         ]
 
-sent_message = await event.reply(
-    "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
-    f"🎬 <b>{html.escape(filename)}</b>\n"
-    f"📦 Size: "
-    f"<code>{size_gb:.2f} GB</code>\n\n"
-    "Click the button below to stream:",
-    buttons=buttons,
-    parse_mode="html"
-)
+         sent_message = await event.reply(
+              "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
+              f"🎬 <b>{html.escape(filename)}</b>\n"
+              f"📦 Size: "
+              f"<code>{size_gb:.2f} GB</code>\n\n"
+              "Click the button below to stream:",
+         buttons=buttons,
+         parse_mode="html"
+        ) 
 
-save_bot_message_id(
-    token,
-    chat_id,
-    int(sent_message.id)
-)
+         save_bot_message_id(
+              token,
+              chat_id,
+             int(sent_message.id)
+         )
 
     except Exception as error:
 
