@@ -279,7 +279,37 @@ def get_proxy_users():
         )
 
         return []
+def get_user_files(user_id):
 
+    try:
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute("""
+                    SELECT
+                        token,
+                        filename,
+                        size,
+                        mime
+                    FROM files
+                    WHERE chat_id = %s
+                    ORDER BY token DESC
+                """, (
+                    int(user_id),
+                ))
+
+                return cursor.fetchall()
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] PostgreSQL files error:",
+            error
+        )
+
+        return []
 
 def purge_user_files(user_id):
 
