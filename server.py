@@ -188,28 +188,7 @@ def save_bot_message_id(
 
         db.commit()
 
-def get_file(token):
 
-    with db_connect() as db:
-
-        with db.cursor() as cursor:
-
-            cursor.execute(
-                """
-                SELECT
-                    token,
-                    chat_id,
-                    message_id,
-                    filename,
-                    size,
-                    mime
-                FROM files
-                WHERE token = %s
-                """,
-                (token,)
-            )
-
-            return cursor.fetchone()
 
 
 # ============================================================
@@ -226,7 +205,25 @@ bot = TelegramClient(
 
 BOT_START_TIME = time.time()
 LAST_ERROR = "None"
+def get_file(token):
 
+    with db_connect() as db:
+
+        with db.cursor() as cursor:
+
+            cursor.execute("""
+                SELECT *
+                FROM files
+                WHERE token = %s
+                AND (
+                    expires_at IS NULL
+                    OR expires_at > NOW()
+                )
+            """, (
+                token,
+            ))
+
+            return cursor.fetchone()
 
 # ============================================================
 # SERVER STATS
