@@ -225,7 +225,60 @@ async def stats_command(event):
             f"<code>{html.escape(str(error))}</code>",
             parse_mode="html"
         )
+               @bot.on(events.NewMessage(pattern=r"^/delete$"))
+async def delete_command(event):
 
+    await event.reply(
+        "⚠️ <b>DELETE ALL FILE LINKS?</b>\n\n"
+        "This will permanently remove all registered "
+        "stream/download links from the database.\n\n"
+        "❗ Telegram original files will NOT be deleted.\n\n"
+        "If you really want to continue, send:\n"
+        "<code>/delete confirm</code>",
+        parse_mode="html"
+    )
+
+
+@bot.on(events.NewMessage(pattern=r"^/delete confirm$"))
+async def delete_confirm_command(event):
+
+    try:
+        with db_connect() as db:
+
+            result = db.execute(
+                "SELECT COUNT(*) AS total FROM files"
+            ).fetchone()
+
+            total = int(result["total"])
+
+            db.execute("DELETE FROM files")
+            db.commit()
+
+        await event.reply(
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "       🗑️ CLEANUP DONE\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            f"📦 Deleted links: <code>{total}</code>\n"
+            "🔗 All old stream/download links are now invalid.\n\n"
+            "📁 Telegram original files: <b>NOT DELETED</b>\n\n"
+            "✅ Database cleaned successfully.\n\n"
+            "❤️ Made with @aswadhh_kr",
+            parse_mode="html"
+        )
+
+        print(
+            f"[+] Manual cleanup completed: {total} file records deleted."
+        )
+
+    except Exception as error:
+
+        print("[!] Manual cleanup error:", error)
+
+        await event.reply(
+            "❌ <b>DELETE ERROR</b>\n\n"
+            f"<code>{html.escape(str(error))}</code>",
+            parse_mode="html"
+        )
 # ============================================================
 # HELPERS
 # ============================================================
