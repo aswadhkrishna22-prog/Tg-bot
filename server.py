@@ -618,21 +618,21 @@ async def receive_file(event):
             ]
         ]
 
-         sent_message = await event.reply(
-              "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
-              f"🎬 <b>{html.escape(filename)}</b>\n"
-              f"📦 Size: "
-              f"<code>{size_gb:.2f} GB</code>\n\n"
-              "Click the button below to stream:",
-         buttons=buttons,
-         parse_mode="html"
-        ) 
+        sent_message = await event.reply(
+            "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
+            f"🎬 <b>{html.escape(filename)}</b>\n"
+            f"📦 Size: "
+            f"<code>{size_gb:.2f} GB</code>\n\n"
+            "Click the button below to stream:",
+            buttons=buttons,
+            parse_mode="html"
+        )
 
-         save_bot_message_id(
-              token,
-              chat_id,
-             int(sent_message.id)
-         )
+        save_bot_message_id(
+            token,
+            chat_id,
+            int(sent_message.id)
+        )
 
     except Exception as error:
 
@@ -1414,6 +1414,85 @@ async def direct_proxy(
 
 
 # ============================================================
+# 12-HOUR AUTO CLEANUP
+# ============================================================
+
+async def cleanup_expired_files():
+
+    while True:
+
+        try:
+
+            expired_files = []
+
+            with db_connect() as db:
+
+                with db.cursor() as cursor:
+
+                    cursor.execute("""
+                        SELECT
+                            token,
+                            bot_chat_id,
+                            bot_message_id
+                        FROM files
+                        WHERE expires_at IS NOT NULL
+                        AND expires_at <= NOW()
+                    """)
+
+                    expired_files = cursor.fetchall()
+
+            for row in expired_files:
+
+                token = row["token"]
+                bot_chat_id = row["bot_chat_id"]
+                bot_message_id = row["bot_message_id"]
+
+                if bot_chat_id and bot_message_id:
+
+                    try:
+
+                        await bot.delete_messages(
+                            int(bot_chat_id),
+                            int(bot_message_id)
+                        )
+
+                    except Exception as error:
+
+                        print(
+                            "[CLEANUP] "
+                            "Telegram message delete failed:",
+                            error
+                        )
+
+                with db_connect() as db:
+
+                    with db.cursor() as cursor:
+
+                        cursor.execute("""
+                            DELETE FROM files
+                            WHERE token = %s
+                        """, (
+                            token,
+                        ))
+
+                    db.commit()
+
+                print(
+                    "[CLEANUP] Expired file removed:",
+                    token
+                )
+
+        except Exception as error:
+
+            print(
+                "[CLEANUP] Error:",
+                error
+            )
+
+        await asyncio.sleep(60)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1481,11 +1560,22 @@ async def main():
 
     server = uvicorn.Server(config)
 
+    cleanup_task = asyncio.create_task(
+        cleanup_expired_files()
+    )
+
     try:
 
         await server.serve()
 
     finally:
+
+        cleanup_task.cancel()
+
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
         print(
             "[+] Disconnecting Telegram..."
