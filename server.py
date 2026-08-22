@@ -222,9 +222,9 @@ async def stats_command(event):
 
         try:
             with db_connect() as db:
-                # use execute/check directly; sqlite3.Connection doesn't provide
-                # a context manager for cursors in some Python versions
-                db.execute("SELECT 1").fetchone()
+                with db.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
 
         except Exception as error:
             db_status = (
