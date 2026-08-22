@@ -175,11 +175,12 @@ async def stats_command(event):
         )
 
         db_status = "✅ ONLINE"
-try:
-    with db_connect() as db:
-        with db.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
+
+        try:
+            with db_connect() as db:
+                # use execute/check directly; sqlite3.Connection doesn't provide
+                # a context manager for cursors in some Python versions
+                db.execute("SELECT 1").fetchone()
 
         except Exception as error:
             db_status = (
@@ -200,20 +201,15 @@ try:
         total_files = 0
 
         try:
-    with db_connect() as db:
+            with db_connect() as db:
+                result = db.execute(
+                    "SELECT COUNT(*) AS total FROM files"
+                ).fetchone()
 
-        with db.cursor() as cursor:
+                total_files = int(result[0] if result is not None else 0)
 
-            cursor.execute(
-                "SELECT COUNT(*) AS total FROM files"
-            )
-
-            result = cursor.fetchone()
-
-            total_files = int(result["total"])
-
-except Exception:
-    total_files = 0
+        except Exception:
+            total_files = 0
 
         message = (
             "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
@@ -1031,7 +1027,6 @@ alt="Video thumbnail"
     class="players"
     id="players"
 >
-
 <button onclick="openPlayer('mx')">
 MX Player
 </button>
