@@ -228,43 +228,36 @@ def get_blocked_users():
 
 
 # ============================================================
-# STADY-PROXY FILE DATABASE
+# STADY-PROXY FILE DATABASE — NEON POSTGRESQL
 # ============================================================
-
-def files_db_exists():
-
-    return FILES_DATABASE.exists()
-
 
 def get_proxy_users():
 
-    if not files_db_exists():
-        return []
-
     try:
 
-        with sqlite3.connect(
-            FILES_DATABASE,
-            timeout=30
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require",
+            cursor_factory=RealDictCursor
         ) as db:
 
-            db.row_factory = sqlite3.Row
+            with db.cursor() as cursor:
 
-            return db.execute(
-                """
-                SELECT
-                    chat_id,
-                    COUNT(*) AS file_count
-                FROM files
-                GROUP BY chat_id
-                ORDER BY file_count DESC
-                """
-            ).fetchall()
+                cursor.execute("""
+                    SELECT
+                        chat_id,
+                        COUNT(*) AS file_count
+                    FROM files
+                    GROUP BY chat_id
+                    ORDER BY file_count DESC
+                """)
 
-    except sqlite3.Error as error:
+                return cursor.fetchall()
+
+    except Exception as error:
 
         print(
-            "[SECURITY] files.db error:",
+            "[SECURITY] PostgreSQL users error:",
             error
         )
 
@@ -273,33 +266,94 @@ def get_proxy_users():
 
 def get_user_files(user_id):
 
-    if not files_db_exists():
+    try:
+
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require",
+            cursor_factory=RealDictCursor
+        ) as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute("""
+                    SELECT
+                        token,
+                        filename,
+                        size,
+                        mime
+                    FROM files
+                    WHERE chat_id = %s
+                    ORDER BY token DESC
+                """, (
+                    int(user_id),
+                ))
+
+                return cursor.fetchall()
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] PostgreSQL files error:",
+            error
+        )
+
         return []
+
+
+def purge_user_files(user_id):
 
     try:
 
-        with sqlite3.connect(
-            FILES_DATABASE,
-            timeout=30
+        with psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require"
         ) as db:
 
-            db.row_factory = sqlite3.Row
+            with db.cursor() as cursor:
 
-            return db.execute(
-                """
-                SELECT
-                    token,
-                    filename,
-                    size,
-                    mime
-                FROM files
-                WHERE chat_id = ?
-                ORDER BY rowid DESC
-                """,
-                (int(user_id),)
-            ).fetchall()
+                cursor.execute("""
+                    DELETE FROM files
+                    WHERE chat_id = %s
+                """, (
+                    int(user_id),
+                ))
 
-    except sqlite3.Error as error:
+                removed = cursor.rowcount
+
+            db.commit()
+
+            return removed
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] PostgreSQL purge error:",
+            error
+        )
+
+        return 0
+
+
+def purge_all_blocked_users():
+
+    blocked = get_blocked_users()
+
+    total_removed = 0
+
+    for row in blocked:
+
+        user_id = int(
+            row["user_id"]
+        )
+
+        removed = purge_user_files(
+            user_id
+        )
+
+        total_removed += removed
+
+    return total_removed
 # ============================================================
 # STADY-PROXY FILE DATABASE — NEON POSTGRESQL
 # ============================================================
