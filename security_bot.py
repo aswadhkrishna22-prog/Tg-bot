@@ -803,7 +803,7 @@ async def main():
     )
 
     print(
-        f"[+] STADY files DB: {FILES_DATABASE}"
+        "[+] STADY files DB: Neon PostgreSQL"
     )
 
     print(
