@@ -5,16 +5,17 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+import time
+import psutil
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events
 import uvicorn
-
 
 # ============================================================
 # CONFIG
@@ -30,28 +31,19 @@ except ValueError:
 API_HASH = os.getenv("TG_API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-PUBLIC_URL = os.getenv(
-    "PUBLIC_URL",
-    "http://127.0.0.1:8000"
-).strip().rstrip("/")
-
+PUBLIC_URL = os.getenv("PUBLIC_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 HOST = "0.0.0.0"
 PORT = 8000
 CHUNK_SIZE = 512 * 1024
-
-LINK_TTL_HOURS = 12
 
 BOT_USERNAME = ""
 
 if API_ID <= 0:
     raise RuntimeError("TG_API_ID is missing or invalid")
-
 if not API_HASH:
     raise RuntimeError("TG_API_HASH is missing")
-
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
-
 
 # ============================================================
 # DATABASE
@@ -60,165 +52,179 @@ if not BOT_TOKEN:
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "files.db"
 
-
 def db_connect():
-    connection = sqlite3.connect(
-        DATABASE,
-        timeout=30
-    )
+    connection = sqlite3.connect(DATABASE, timeout=30)
     connection.row_factory = sqlite3.Row
     return connection
 
-
 def init_database():
     with db_connect() as db:
-
         db.execute("""
-        CREATE TABLE IF NOT EXISTS files (
-            token TEXT PRIMARY KEY,
-            chat_id INTEGER NOT NULL,
-            message_id INTEGER NOT NULL,
-            filename TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            mime TEXT NOT NULL,
-            expires_at TEXT,
-            reply_chat_id INTEGER,
-            reply_message_id INTEGER
-        )
+            CREATE TABLE IF NOT EXISTS files (
+                token TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mime TEXT NOT NULL
+            )
         """)
-
-        columns = {
-            row["name"]
-            for row in db.execute(
-                "PRAGMA table_info(files)"
-            ).fetchall()
-        }
-
-        if "expires_at" not in columns:
-            db.execute(
-                "ALTER TABLE files ADD COLUMN expires_at TEXT"
-            )
-
-        if "reply_chat_id" not in columns:
-            db.execute(
-                "ALTER TABLE files ADD COLUMN reply_chat_id INTEGER"
-            )
-
-        if "reply_message_id" not in columns:
-            db.execute(
-                "ALTER TABLE files ADD COLUMN reply_message_id INTEGER"
-            )
-
         db.commit()
 
-
-def add_file(
-    token,
-    chat_id,
-    message_id,
-    filename,
-    size,
-    mime,
-    expires_at
-):
+def add_file(token, chat_id, message_id, filename, size, mime):
     with db_connect() as db:
-
         db.execute("""
-        INSERT INTO files (
-            token,
-            chat_id,
-            message_id,
-            filename,
-            size,
-            mime,
-            expires_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            token,
-            chat_id,
-            message_id,
-            filename,
-            size,
-            mime,
-            expires_at
-        ))
-
+            INSERT INTO files
+            (token, chat_id, message_id, filename, size, mime)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (token, chat_id, message_id, filename, size, mime))
         db.commit()
-
-
-def set_reply_message(
-    token,
-    chat_id,
-    message_id
-):
-    with db_connect() as db:
-
-        db.execute("""
-        UPDATE files
-        SET
-            reply_chat_id = ?,
-            reply_message_id = ?
-        WHERE token = ?
-        """, (
-            chat_id,
-            message_id,
-            token
-        ))
-
-        db.commit()
-
 
 def get_file(token):
     with db_connect() as db:
-
         return db.execute(
-            """
-            SELECT *
-            FROM files
-            WHERE token = ?
-            """,
-            (token,)
+            "SELECT * FROM files WHERE token = ?", (token,)
         ).fetchone()
-
-
-def delete_file_record(token):
-    with db_connect() as db:
-
-        db.execute(
-            "DELETE FROM files WHERE token = ?",
-            (token,)
-        )
-
-        db.commit()
-
-
-def get_all_expiry_records():
-    with db_connect() as db:
-
-        return db.execute(
-            """
-            SELECT *
-            FROM files
-            WHERE expires_at IS NOT NULL
-            """
-        ).fetchall()
-
 
 # ============================================================
 # FASTAPI / TELEGRAM
 # ============================================================
 
-app = FastAPI(
-    title="STADY-PROXY"
-)
+app = FastAPI(title="STADY-PROXY")
+bot = TelegramClient("proxybot", API_ID, API_HASH)
 
-bot = TelegramClient(
-    "proxybot",
-    API_ID,
-    API_HASH
-)
+BOT_START_TIME = time.time()
+LAST_ERROR = "None"
 
+# ============================================================
+# SERVER STATS
+# ============================================================
+
+def format_uptime(seconds):
+    seconds = int(seconds)
+
+    days = seconds // 86400
+    seconds %= 86400
+
+    hours = seconds // 3600
+    seconds %= 3600
+
+    minutes = seconds // 60
+    seconds %= 60
+
+    return f"{days}d {hours}h {minutes}m {seconds}s"
+
+
+def usage_bar(percent, total=10):
+    filled = round(percent / 100 * total)
+    filled = max(0, min(total, filled))
+    return "●" * filled + "○" * (total - filled)
+
+
+@bot.on(events.NewMessage(pattern=r"^/stats$"))
+async def stats_command(event):
+
+    try:
+        cpu = psutil.cpu_percent(interval=0.5)
+
+        ram = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+
+        bot_uptime = format_uptime(
+            time.time() - BOT_START_TIME
+        )
+
+        system_uptime = format_uptime(
+            time.time() - psutil.boot_time()
+        )
+
+        db_status = "✅ ONLINE"
+
+        try:
+            with db_connect() as db:
+                db.execute("SELECT 1").fetchone()
+        except Exception as error:
+            db_status = f"❌ ERROR: {error}"
+
+        try:
+            telegram_status = (
+                "✅ CONNECTED"
+                if bot.is_connected()
+                else "❌ DISCONNECTED"
+            )
+        except Exception:
+            telegram_status = "❌ UNKNOWN"
+
+        total_files = 0
+
+        try:
+            with db_connect() as db:
+                result = db.execute(
+                    "SELECT COUNT(*) AS total FROM files"
+                ).fetchone()
+
+                total_files = int(result["total"])
+        except Exception:
+            total_files = 0
+
+        message = (
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "        ⚡ STADY-PROXY\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+
+            "📊 <b>SERVER STATISTICS</b>\n\n"
+
+            f"🤖 BOT STATUS: {telegram_status}\n"
+            f"🌐 SERVER: ✅ ONLINE\n"
+            f"🗄️ DATABASE: {db_status}\n\n"
+
+            f"⏱️ BOT UPTIME: <code>{bot_uptime}</code>\n"
+            f"🖥️ SYS UPTIME: <code>{system_uptime}</code>\n\n"
+
+            f"⚙️ CPU: {usage_bar(cpu)} "
+            f"<code>{cpu:.1f}%</code>\n\n"
+
+            f"🧠 RAM: {usage_bar(ram.percent)} "
+            f"<code>{ram.percent:.1f}%</code>\n"
+            f"RAM In Use: "
+            f"<code>{ram.used / 1024**3:.2f} GB</code>\n"
+            f"RAM Total: "
+            f"<code>{ram.total / 1024**3:.2f} GB</code>\n"
+            f"RAM Free: "
+            f"<code>{ram.available / 1024**3:.2f} GB</code>\n\n"
+
+            f"💾 DISK: {usage_bar(disk.percent)} "
+            f"<code>{disk.percent:.1f}%</code>\n"
+            f"Drive In Use: "
+            f"<code>{disk.used / 1024**3:.2f} GB</code>\n"
+            f"Drive Total: "
+            f"<code>{disk.total / 1024**3:.2f} GB</code>\n"
+            f"Drive Free: "
+            f"<code>{disk.free / 1024**3:.2f} GB</code>\n\n"
+
+            f"📦 REGISTERED FILES: "
+            f"<code>{total_files}</code>\n\n"
+
+            f"🛠️ LAST ERROR:\n"
+            f"<code>{html.escape(str(LAST_ERROR))}</code>\n\n"
+
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "❤️ Made with @aswadhh_kr"
+        )
+
+        await event.reply(
+            message,
+            parse_mode="html"
+        )
+
+    except Exception as error:
+        print("[!] Stats command error:", error)
+
+        await event.reply(
+            "❌ <b>STATS ERROR</b>\n\n"
+            f"<code>{html.escape(str(error))}</code>",
+            parse_mode="html"
+        )
 
 # ============================================================
 # HELPERS
@@ -227,26 +233,15 @@ bot = TelegramClient(
 def clean_filename(name):
     if not name:
         return "file"
-
     name = os.path.basename(name)
-
-    name = re.sub(
-        r'[<>:"/\\|?*\x00-\x1f]',
-        "_",
-        name
-    )
-
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
     return name[:180] or "file"
-
 
 def get_mime(filename):
     mime, _ = mimetypes.guess_type(filename)
-
     return mime or "application/octet-stream"
 
-
 def parse_range(range_header, file_size):
-
     if not range_header:
         return 0, file_size - 1
 
@@ -254,113 +249,51 @@ def parse_range(range_header, file_size):
         raise ValueError("Invalid range")
 
     value = range_header[6:]
-
     if "," in value:
-        raise ValueError(
-            "Multiple ranges not supported"
-        )
+        raise ValueError("Multiple ranges not supported")
 
-    start_text, end_text = value.split(
-        "-",
-        1
-    )
+    start_text, end_text = value.split("-", 1)
 
     if start_text:
-
         start = int(start_text)
-
         if start >= file_size:
-            raise ValueError(
-                "Range outside file"
-            )
+            raise ValueError("Range outside file")
 
         if end_text:
-            end = min(
-                int(end_text),
-                file_size - 1
-            )
+            end = min(int(end_text), file_size - 1)
         else:
             end = file_size - 1
 
         if start > end:
-            raise ValueError(
-                "Invalid range"
-            )
+            raise ValueError("Invalid range")
 
         return start, end
 
     end = int(end_text)
-
     if end <= 0:
-        raise ValueError(
-            "Invalid suffix range"
-        )
+        raise ValueError("Invalid suffix range")
 
-    start = max(
-        file_size - end,
-        0
-    )
-
+    start = max(file_size - end, 0)
     return start, file_size - 1
-
-
-def parse_expiry(value):
-
-    try:
-        expiry = datetime.fromisoformat(value)
-
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(
-                tzinfo=timezone.utc
-            )
-
-        return expiry
-
-    except Exception:
-        return None
-
-
-def is_expired(row):
-
-    expiry = parse_expiry(
-        row["expires_at"]
-    )
-
-    if expiry is None:
-        return True
-
-    return (
-        datetime.now(timezone.utc)
-        >= expiry
-    )
-
 
 # ============================================================
 # TELEGRAM STREAM
 # ============================================================
 
-async def telegram_stream(
-    message,
-    offset,
-    length
-):
-
+async def telegram_stream(message, offset, length):
     sent = 0
 
     try:
-
         async for chunk in bot.iter_download(
             message.media,
             offset=offset,
             limit=length,
             request_size=CHUNK_SIZE
         ):
-
             if not chunk:
                 continue
 
             sent += len(chunk)
-
             yield chunk
 
             if sent >= length:
@@ -368,214 +301,38 @@ async def telegram_stream(
 
     except asyncio.CancelledError:
         return
-
     except Exception as error:
-
-        print(
-            "[!] Telegram streaming error:",
-            error
-        )
-
+        print("[!] Telegram streaming error:", error)
 
 # ============================================================
-# EXPIRE ONE FILE
-# ============================================================
-
-async def expire_file_later(
-    token,
-    expires_at
-):
-
-    delay = (
-        expires_at
-        - datetime.now(timezone.utc)
-    ).total_seconds()
-
-    if delay > 0:
-        await asyncio.sleep(delay)
-
-    row = get_file(token)
-
-    if not row:
-        return
-
-    if not is_expired(row):
-        return
-
-    try:
-
-        reply_chat_id = row[
-            "reply_chat_id"
-        ]
-
-        reply_message_id = row[
-            "reply_message_id"
-        ]
-
-        if (
-            reply_chat_id
-            and reply_message_id
-        ):
-
-            await bot.delete_messages(
-                reply_chat_id,
-                reply_message_id
-            )
-
-            print(
-                "[+] Bot reply deleted:",
-                token
-            )
-
-    except Exception as error:
-
-        print(
-            "[!] Could not delete bot reply:",
-            error
-        )
-
-    delete_file_record(token)
-
-    print(
-        "[+] 12-hour link expired:",
-        token
-    )
-
-
-# ============================================================
-# CLEANUP AFTER RENDER RESTART
-# ============================================================
-
-async def cleanup_expired_files():
-
-    rows = get_all_expiry_records()
-
-    now = datetime.now(
-        timezone.utc
-    )
-
-    for row in rows:
-
-        expiry = parse_expiry(
-            row["expires_at"]
-        )
-
-        if not expiry:
-            continue
-
-        if now < expiry:
-            continue
-
-        token = row["token"]
-
-        try:
-
-            if (
-                row["reply_chat_id"]
-                and row["reply_message_id"]
-            ):
-
-                await bot.delete_messages(
-                    row["reply_chat_id"],
-                    row["reply_message_id"]
-                )
-
-                print(
-                    "[+] Expired bot message deleted:",
-                    token
-                )
-
-        except Exception as error:
-
-            print(
-                "[!] Old bot message delete error:",
-                error
-            )
-
-        delete_file_record(token)
-
-        print(
-            "[+] Expired database record removed:",
-            token
-        )
-
-
-async def cleanup_loop():
-
-    while True:
-
-        try:
-            await cleanup_expired_files()
-
-        except Exception as error:
-
-            print(
-                "[!] Cleanup loop error:",
-                error
-            )
-
-        await asyncio.sleep(300)
-
-
-# ============================================================
-# TELEGRAM BOT HANDLER
+# TELEGRAM BOT HANDLERS
 # ============================================================
 
 @bot.on(events.NewMessage)
 async def receive_file(event):
-
     if not event.file:
         return
 
     try:
-
         filename = event.file.name
 
         if not filename:
-
-            mime = (
-                event.file.mime_type
-                or "application/octet-stream"
-            )
+            mime = event.file.mime_type or "application/octet-stream"
 
             if mime.startswith("video/"):
                 filename = "video.mp4"
-
             elif mime.startswith("audio/"):
                 filename = "audio.mp3"
-
             else:
                 filename = "telegram_file"
 
-        filename = clean_filename(
-            filename
-        )
-
-        size = int(
-            event.file.size or 0
-        )
-
-        mime = (
-            event.file.mime_type
-            or get_mime(filename)
-        )
+        filename = clean_filename(filename)
+        size = int(event.file.size or 0)
+        mime = event.file.mime_type or get_mime(filename)
 
         token = uuid.uuid4().hex
-
-        chat_id = int(
-            event.chat_id
-        )
-
-        message_id = int(
-            event.id
-        )
-
-        expires_at = (
-            datetime.now(timezone.utc)
-            + timedelta(
-                hours=LINK_TTL_HOURS
-            )
-        )
+        chat_id = int(event.chat_id)
+        message_id = int(event.id)
 
         add_file(
             token,
@@ -583,185 +340,48 @@ async def receive_file(event):
             message_id,
             filename,
             size,
-            mime,
-            expires_at.isoformat()
+            mime
         )
 
-        stream_url = (
-            f"{PUBLIC_URL}/watch/{token}"
-        )
-
-        download_url = (
-            f"{PUBLIC_URL}/"
-            f"{token}/"
-            f"{quote(filename, safe='')}"
-            f"?action=download"
-        )
-
-        size_gb = (
-            size
-            / 1024
-            / 1024
-            / 1024
-        )
+        stream_url = f"{PUBLIC_URL}/watch/{token}"
+        size_gb = size / 1024 / 1024 / 1024
 
         print("\n" + "=" * 60)
-
-        print(
-            "[+] Telegram file registered"
-        )
-
-        print(
-            "[+] Filename:",
-            filename
-        )
-
-        print(
-            f"[+] Size: {size_gb:.2f} GB"
-        )
-
-        print(
-            "[+] Token:",
-            token
-        )
-
-        print(
-            "[+] Expires:",
-            expires_at.isoformat()
-        )
-
-        print(
-            "[+] Stream URL:",
-            stream_url
-        )
-
-        print(
-            "[+] Download URL:",
-            download_url
-        )
-
+        print("[+] Telegram file registered")
+        print("[+] Filename:", filename)
+        print(f"[+] Size: {size_gb:.2f} GB")
+        print("[+] Token:", token)
         print("=" * 60)
 
-        buttons = [
-            [
-                Button.url(
-                    "⚡ FAST DOWNLOAD 💥",
-                    download_url
-                )
-            ],
-            [
-                Button.url(
-                    "▶️ WATCH / STREAM",
-                    stream_url
-                )
-            ]
-        ]
-
-        reply = await event.reply(
-
+        await event.reply(
             "✅ STADY-PROXY file ready!\n\n"
-
             f"🎬 {filename}\n"
-
             f"📦 Size: {size_gb:.2f} GB\n\n"
-
-            "⏳ This file will be deleted "
-            "in 12 hours.\n"
-
-            "🔗 This link will expire "
-            "in 12 hours.\n\n"
-
-            "👇 Choose an option:",
-
-            buttons=buttons
-        )
-
-        set_reply_message(
-            token,
-            int(reply.chat_id),
-            int(reply.id)
-        )
-
-        asyncio.create_task(
-            expire_file_later(
-                token,
-                expires_at
-            )
+            f"▶️ Watch / Stream:\n{stream_url}"
         )
 
     except Exception as error:
-
-        print(
-            "[!] File registration error:",
-            error
-        )
+        print("[!] File registration error:", error)
 
         try:
-
             await event.reply(
-                "❌ Could not create "
-                "stream link.\n\n"
-                f"{error}"
+                f"❌ Could not create stream link.\n\n{error}"
             )
-
         except Exception:
             pass
 
-
-# ============================================================
-# /START
-# ============================================================
-
-@bot.on(
-    events.NewMessage(
-        pattern=r"^/start$"
-    )
-)
+@bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
-
     await event.reply(
-        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-        "        ⚡ STADY-PROXY\n"
-        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
-
-        "🎬 FILE → STREAM → DOWNLOAD\n\n"
-
-        "Send me any video or file and\n"
-        "I'll instantly create a browser\n"
-        "streaming & download link for you.\n\n"
-
-        "✨ FEATURES\n\n"
-
-        "▶️ Fast Browser Streaming\n"
-        "☁️ Direct Download\n"
-        "📱 Mobile Friendly\n"
-        "🔗 Easy Link Sharing\n"
-        "📦 Supports MP4, MKV, MP3, APK,\n"
-        "   ZIP, PDF & many more formats\n\n"
-
-        "⏳ 12-HOUR LINK\n"
-        "Your generated link stays active\n"
-        "for 12 hours only.\n\n"
-
-        "🗑️ AUTO CLEANUP\n"
-        "Generated bot messages are\n"
-        "automatically deleted after 12 hours.\n\n"
-
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        "📤 Send your file to get started.\n\n"
-
-        '❤️ Made with '
-        '<a href="https://www.instagram.com/2aswadhh_._kr">'
-        'aswadh_kr'
-        '</a>',
-
-        parse_mode="html"
+        "👋 STADY-PROXY\n\n"
+        "Send me a video/file and I will create a browser "
+        "streaming link."
     )
-
 
 # ============================================================
 # STADY-PROXY THEME
+# IMPORTANT:
+# CSS uses SINGLE braces because this string is not an f-string.
 # ============================================================
 
 STADY_CSS = """
@@ -770,377 +390,286 @@ STADY_CSS = """
 *{box-sizing:border-box}
 
 html,body{
-margin:0;
-min-height:100%;
-font-family:Poppins,Arial,sans-serif;
-background:#030914;
-color:#eaf7ff;
+    margin:0;
+    min-height:100%;
+    font-family:Poppins,Arial,sans-serif;
+    background:#030914;
+    color:#eaf7ff;
 }
 
 body{
-overflow-x:hidden;
-background:
-radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
-radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
-linear-gradient(180deg,#020812,#061629 55%,#020812);
+    overflow-x:hidden;
+    background:
+        radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
+        radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
+        linear-gradient(180deg,#020812,#061629 55%,#020812);
 }
 
 body:before{
-content:"";
-position:fixed;
-inset:0;
-pointer-events:none;
-opacity:.32;
-background-image:
-linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
-linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
-background-size:34px 34px;
-mask-image:linear-gradient(
-to bottom,
-transparent,
-#000 12%,
-#000 85%,
-transparent
-);
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    opacity:.32;
+    background-image:
+        linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
+    background-size:34px 34px;
+    mask-image:linear-gradient(
+        to bottom,
+        transparent,
+        #000 12%,
+        #000 85%,
+        transparent
+    );
 }
 
 .page{
-width:min(720px,100%);
-margin:auto;
-padding:22px 14px 45px;
+    width:min(720px,100%);
+    margin:auto;
+    padding:22px 14px 45px;
 }
 
 .brand{
-text-align:center;
-font-family:Orbitron,sans-serif;
-font-size:clamp(28px,7vw,46px);
-font-weight:800;
-letter-spacing:2px;
-margin:8px 0 20px;
-color:#69f7ff;
-text-shadow:
-0 0 8px #00eaff,
-0 0 22px #7c28ff,
-0 0 40px #ff18d5;
+    text-align:center;
+    font-family:Orbitron,sans-serif;
+    font-size:clamp(28px,7vw,46px);
+    font-weight:800;
+    letter-spacing:2px;
+    margin:8px 0 20px;
+    color:#69f7ff;
+    text-shadow:
+        0 0 8px #00eaff,
+        0 0 22px #7c28ff,
+        0 0 40px #ff18d5;
 }
 
 .frame{
-position:relative;
-padding:12px;
-border:2px solid #42eaff;
-border-radius:15px;
-background:
-linear-gradient(
-145deg,
-rgba(12,43,72,.9),
-rgba(4,13,28,.94)
-);
-box-shadow:
-0 0 10px #00eaff,
-inset 0 0 20px rgba(0,234,255,.15),
-0 0 30px rgba(255,0,213,.2);
+    position:relative;
+    padding:12px;
+    border:2px solid #42eaff;
+    border-radius:15px;
+    background:
+        linear-gradient(
+            145deg,
+            rgba(12,43,72,.9),
+            rgba(4,13,28,.94)
+        );
+    box-shadow:
+        0 0 10px #00eaff,
+        inset 0 0 20px rgba(0,234,255,.15),
+        0 0 30px rgba(255,0,213,.2);
 }
 
 .frame:before,
 .frame:after{
-content:"";
-position:absolute;
-height:5px;
-width:90px;
-top:-5px;
-background:linear-gradient(
-90deg,
-#00eaff,
-#bdfcff,
-#ff24d7
-);
-box-shadow:0 0 12px #00eaff;
-border-radius:4px;
+    content:"";
+    position:absolute;
+    height:5px;
+    width:90px;
+    top:-5px;
+    background:linear-gradient(
+        90deg,
+        #00eaff,
+        #bdfcff,
+        #ff24d7
+    );
+    box-shadow:0 0 12px #00eaff;
+    border-radius:4px;
 }
 
 .frame:before{left:35px}
 .frame:after{right:35px}
 
 .poster{
-position:relative;
-overflow:hidden;
-border:2px solid #36f3ff;
-border-radius:8px;
-aspect-ratio:16/9;
-background:#0a2039;
-box-shadow:
-inset 0 0 22px rgba(0,255,255,.35),
-0 0 14px rgba(0,234,255,.45);
+    position:relative;
+    overflow:hidden;
+    border:2px solid #36f3ff;
+    border-radius:8px;
+    aspect-ratio:16/9;
+    background:#0a2039;
+    box-shadow:
+        inset 0 0 22px rgba(0,255,255,.35),
+        0 0 14px rgba(0,234,255,.45);
 }
 
-.poster video{
-width:100%;
-height:100%;
-display:block;
-object-fit:cover;
-background:#000;
+.poster img{
+    width:100%;
+    height:100%;
+    display:block;
+    object-fit:cover;
 }
 
 .play{
-position:absolute;
-left:50%;
-top:50%;
-transform:translate(-50%,-50%);
-width:118px;
-height:82px;
-border:2px solid #9afcff;
-border-radius:16px;
-background:rgba(75,90,112,.58);
-backdrop-filter:blur(5px);
-color:#dffcff;
-font-size:44px;
-line-height:78px;
-text-align:center;
-text-shadow:0 0 10px #00eaff;
-box-shadow:0 0 18px rgba(0,238,255,.35);
-cursor:pointer;
-z-index:5;
-}
-
-.play.hidden{
-display:none;
-}
-
-.video-error{
-display:none;
-position:absolute;
-left:50%;
-top:50%;
-transform:translate(-50%,-50%);
-width:90%;
-text-align:center;
-color:#ffffff;
-font-size:14px;
-line-height:1.6;
-z-index:4;
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    width:118px;
+    height:82px;
+    border:2px solid #9afcff;
+    border-radius:16px;
+    background:rgba(75,90,112,.58);
+    backdrop-filter:blur(5px);
+    color:#dffcff;
+    font-size:44px;
+    line-height:78px;
+    text-align:center;
+    text-shadow:0 0 10px #00eaff;
+    box-shadow:0 0 18px rgba(0,238,255,.35);
+    cursor:pointer;
 }
 
 .actions{
-display:grid;
-gap:14px;
-margin:18px 0;
+    display:grid;
+    gap:14px;
+    margin:18px 0;
 }
 
 .btn{
-appearance:none;
-border:2px solid #38f5ff;
-border-radius:10px;
-padding:15px 12px;
-width:100%;
-font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
-color:#eaffff;
-cursor:pointer;
-background:
-linear-gradient(
-180deg,
-rgba(17,72,103,.95),
-rgba(10,33,62,.98)
-);
-box-shadow:
-0 0 9px rgba(0,238,255,.75),
-inset 0 0 16px rgba(0,238,255,.12),
-0 5px 0 rgba(255,0,204,.35);
-transition:.18s transform,.18s filter;
+    appearance:none;
+    border:2px solid #38f5ff;
+    border-radius:10px;
+    padding:15px 12px;
+    width:100%;
+    font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
+    color:#eaffff;
+    cursor:pointer;
+    background:
+        linear-gradient(
+            180deg,
+            rgba(17,72,103,.95),
+            rgba(10,33,62,.98)
+        );
+    box-shadow:
+        0 0 9px rgba(0,238,255,.75),
+        inset 0 0 16px rgba(0,238,255,.12),
+        0 5px 0 rgba(255,0,204,.35);
+    transition:.18s transform,.18s filter;
 }
 
 .btn:hover{
-filter:brightness(1.25);
-transform:translateY(-2px);
+    filter:brightness(1.25);
+    transform:translateY(-2px);
 }
 
 .btn:active{
-transform:translateY(1px);
+    transform:translateY(1px);
 }
 
 .players{
-display:none;
-border-radius:0 0 18px 18px;
-background:#101b28;
-margin-top:-14px;
-padding:22px 12px 18px;
-text-align:center;
-box-shadow:0 8px 18px rgba(0,0,0,.35);
-font-size:18px;
+    display:none;
+    border-radius:0 0 18px 18px;
+    background:#101b28;
+    margin-top:-14px;
+    padding:22px 12px 18px;
+    text-align:center;
+    box-shadow:0 8px 18px rgba(0,0,0,.35);
+    font-size:18px;
 }
 
 .players button{
-display:block;
-width:100%;
-border:0;
-background:none;
-color:#f0f5ff;
-font:inherit;
-padding:8px;
-cursor:pointer;
+    display:block;
+    width:100%;
+    border:0;
+    background:none;
+    color:#f0f5ff;
+    font:inherit;
+    padding:8px;
+    cursor:pointer;
 }
 
 .players button:hover{
-color:#56efff;
+    color:#56efff;
 }
 
 .info{
-margin-top:14px;
-padding:16px 4px 8px;
-font-size:16px;
-line-height:2;
-color:#e7f4ff;
+    margin-top:14px;
+    padding:16px 4px 8px;
+    font-size:16px;
+    line-height:2;
+    color:#e7f4ff;
 }
 
 .info div{
-white-space:nowrap;
-overflow:hidden;
-text-overflow:ellipsis;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
 }
 
 .info b{
-font-weight:500;
-}
-
-.credit{
-margin-top:25px;
-text-align:center;
-color:#bfeeff;
-font-size:14px;
-line-height:1.8;
-opacity:.9;
-}
-
-.credit a{
-color:#ff8fce;
-text-decoration:none;
-font-weight:600;
-}
-
-.credit a:hover{
-color:#ffffff;
-text-decoration:underline;
-}
-
-.instagram-icon{
-width:17px;
-height:17px;
-vertical-align:-3px;
-margin:0 4px;
+    font-weight:500;
 }
 
 .status{
-font-size:13px;
-color:#8edfff;
-text-align:center;
-margin-top:8px;
-opacity:.8;
+    font-size:13px;
+    color:#8edfff;
+    text-align:center;
+    margin-top:8px;
+    opacity:.8;
 }
 
 @media(max-width:480px){
+    .page{
+        padding-left:9px;
+        padding-right:9px;
+    }
 
-.page{
-padding-left:9px;
-padding-right:9px;
-}
+    .frame{
+        padding:9px;
+    }
 
-.frame{
-padding:9px;
-}
+    .play{
+        width:95px;
+        height:68px;
+        line-height:64px;
+        font-size:34px;
+    }
 
-.play{
-width:95px;
-height:68px;
-line-height:64px;
-font-size:34px;
-}
-
-.info{
-font-size:14px;
-}
-
-.credit{
-font-size:13px;
-}
-
+    .info{
+        font-size:14px;
+    }
 }
 """
-
 
 # ============================================================
 # HOME
 # ============================================================
 
-@app.get(
-    "/",
-    response_class=HTMLResponse
-)
+@app.get("/", response_class=HTMLResponse)
 async def home():
-
     return f"""<!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-name="viewport"
-content="width=device-width,
-initial-scale=1.0"
->
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STADY-PROXY</title>
-
 <style>{STADY_CSS}</style>
-
 </head>
-
 <body>
-
 <main class="page">
+    <div class="brand">STADY-PROXY</div>
 
-<div class="brand">
-STADY-PROXY
-</div>
+    <section class="frame">
+        <div class="poster">
+            <img src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85">
+        </div>
 
-<section class="frame">
-
-<div class="poster">
-
-<img
-src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-style="width:100%;height:100%;object-fit:cover;"
->
-
-</div>
-
-<div
-class="status"
-style="font-size:20px;margin:25px 0;"
->
-SERVER ONLINE 🚀
-</div>
-
-</section>
-
+        <div class="status"
+             style="font-size:20px;margin:25px 0;">
+            SERVER ONLINE 🚀
+        </div>
+    </section>
 </main>
-
 </body>
-
 </html>"""
-
 
 # ============================================================
 # WATCH PAGE
 # ============================================================
 
-@app.get(
-    "/watch/{token}",
-    response_class=HTMLResponse
-)
+@app.get("/watch/{token}", response_class=HTMLResponse)
 async def watch(token):
-
     row = get_file(token)
 
     if not row:
@@ -1149,68 +678,28 @@ async def watch(token):
             detail="File not found"
         )
 
-    if is_expired(row):
-
-        delete_file_record(token)
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "This file link has expired "
-                "after 12 hours."
-            )
-        )
-
     filename = row["filename"]
-
-    safe_name = html.escape(
-        filename
-    )
-
-    encoded_filename = quote(
-        filename,
-        safe=""
-    )
+    safe_name = html.escape(filename)
+    encoded_filename = quote(filename, safe="")
 
     stream_url = (
-        f"{PUBLIC_URL}/"
-        f"{token}/"
-        f"{encoded_filename}"
-        f"?action=stream"
+        f"{PUBLIC_URL}/{token}/{encoded_filename}?action=stream"
     )
 
     download_url = (
-        f"{PUBLIC_URL}/"
-        f"{token}/"
-        f"{encoded_filename}"
-        f"?action=download"
+        f"{PUBLIC_URL}/{token}/{encoded_filename}?action=download"
     )
 
-    file_size = int(
-        row["size"]
-    )
+    file_size = int(row["size"])
 
     if file_size >= 1024**3:
-
-        size_str = (
-            f"{file_size / 1024**3:.2f} GB"
-        )
-
+        size_str = f"{file_size / 1024**3:.2f} GB"
     elif file_size >= 1024**2:
-
-        size_str = (
-            f"{file_size / 1024**2:.2f} MB"
-        )
-
+        size_str = f"{file_size / 1024**2:.2f} MB"
     else:
+        size_str = f"{file_size / 1024:.2f} KB"
 
-        size_str = (
-            f"{file_size / 1024:.2f} KB"
-        )
-
-    created = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     stream_no_scheme = (
         stream_url
@@ -1218,104 +707,52 @@ async def watch(token):
         .replace("http://", "")
     )
 
-    scheme = (
-        "https"
-        if stream_url.startswith("https://")
-        else "http"
-    )
+    scheme = "https" if stream_url.startswith("https://") else "http"
 
     return f"""<!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
-<meta
-name="viewport"
-content="width=device-width,
-initial-scale=1.0,
-maximum-scale=1.0"
->
-
-<title>
-STADY-PROXY | {safe_name}
-</title>
-
+<title>STADY-PROXY | {safe_name}</title>
 <style>{STADY_CSS}</style>
-
 </head>
 
 <body>
 
 <main class="page">
 
-<div class="brand">
-STADY-PROXY
-</div>
+<div class="brand">STADY-PROXY</div>
 
 <section class="frame">
 
 <div class="poster">
 
-<video
-id="videoPlayer"
-preload="metadata"
-playsinline
-controls
-poster="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
->
+<img
+src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
+alt="Video thumbnail">
 
-<source
-src="{stream_url}"
-type="{html.escape(row['mime'])}"
->
-
-Your browser does not support HTML5 video.
-
-</video>
-
-<button
-class="play"
-id="playButton"
-aria-label="Play video"
-onclick="playVideo()"
->
-▶
-</button>
-
-<div
-class="video-error"
-id="videoError"
->
-⚠️ This video format cannot be played by this browser.
-<br>
-Try Download or an external video player.
-</div>
+<button class="play"
+        aria-label="Play"
+        onclick="stream()">▶</button>
 
 </div>
 
 <div class="actions">
 
-<button
-class="btn"
-onclick="downloadFile()"
->
+<button class="btn"
+        onclick="downloadFile()">
 ☁️ Download ☁️
 </button>
 
-<button
-class="btn"
-onclick="togglePlayers()"
->
+<button class="btn"
+        onclick="togglePlayers()">
 ⏵ Stream ⏵
 </button>
 
-<div
-class="players"
-id="players"
->
+<div class="players" id="players">
 
 <button onclick="openPlayer('mx')">
 MX Player
@@ -1351,10 +788,8 @@ nPlayer
 
 </div>
 
-<button
-class="btn"
-onclick="telegramDownload()"
->
+<button class="btn"
+        onclick="telegramDownload()">
 ✈️ Telegram Download ✈️
 </button>
 
@@ -1382,75 +817,11 @@ onclick="telegramDownload()"
 <span>{created}</span>
 </div>
 
-<div>
-⏳ <b>Link Validity:</b>
-<span>12 Hours</span>
-</div>
-
 </div>
 
 </section>
 
-<!-- =====================================================
-     INSTAGRAM CREDIT
-     ===================================================== -->
-
-<div class="credit">
-
-by
-
-<a
-href="https://www.instagram.com/2aswadhh_._kr?igsi=MXV5NGR3M2l1aDRq"
-target="_blank"
-rel="noopener noreferrer"
->
-
-<svg
-class="instagram-icon"
-viewBox="0 0 24 24"
-fill="none"
-xmlns="http://www.w3.org/2000/svg"
->
-
-<rect
-x="3"
-y="3"
-width="18"
-height="18"
-rx="5"
-stroke="currentColor"
-stroke-width="2"
-/>
-
-<circle
-cx="12"
-cy="12"
-r="4"
-stroke="currentColor"
-stroke-width="2"
-/>
-
-<circle
-cx="17.5"
-cy="6.5"
-r="1"
-fill="currentColor"
-/>
-
-</svg>
-
-aswadh_kr
-
-</a>
-
-&nbsp;and made with ♥️
-
-</div>
-
-<div
-class="status"
-id="status"
->
+<div class="status" id="status">
 STADY-PROXY • READY
 </div>
 
@@ -1458,390 +829,164 @@ STADY-PROXY • READY
 
 <script>
 
-const STREAM_URL =
-{stream_url!r};
-
-const DOWNLOAD_URL =
-{download_url!r};
-
-const BOT_USERNAME =
-{BOT_USERNAME!r};
-
-const videoPlayer =
-document.getElementById(
-"videoPlayer"
-);
-
-const playButton =
-document.getElementById(
-"playButton"
-);
-
-const videoError =
-document.getElementById(
-"videoError"
-);
+const STREAM_URL = {stream_url!r};
+const DOWNLOAD_URL = {download_url!r};
+const BOT_USERNAME = {BOT_USERNAME!r};
 
 function setStatus(text) {{
-
-document
-.getElementById("status")
-.textContent = text;
-
+    document.getElementById("status").textContent = text;
 }}
-
-async function playVideo() {{
-
-try {{
-
-videoError.style.display =
-"none";
-
-await videoPlayer.play();
-
-playButton.classList.add(
-"hidden"
-);
-
-setStatus(
-"STADY-PROXY • PLAYING"
-);
-
-}} catch(error) {{
-
-console.log(
-"Video playback error:",
-error
-);
-
-videoError.style.display =
-"block";
-
-setStatus(
-"Browser cannot play this video format"
-);
-
-}}
-
-}}
-
-videoPlayer.addEventListener(
-"play",
-function() {{
-
-playButton.classList.add(
-"hidden"
-);
-
-setStatus(
-"STADY-PROXY • PLAYING"
-);
-
-}}
-);
-
-videoPlayer.addEventListener(
-"pause",
-function() {{
-
-if (!videoPlayer.ended) {{
-
-playButton.classList.remove(
-"hidden"
-);
-
-setStatus(
-"STADY-PROXY • PAUSED"
-);
-
-}}
-
-}}
-);
-
-videoPlayer.addEventListener(
-"ended",
-function() {{
-
-playButton.classList.remove(
-"hidden"
-);
-
-setStatus(
-"STADY-PROXY • FINISHED"
-);
-
-}}
-);
-
-videoPlayer.addEventListener(
-"error",
-function() {{
-
-videoError.style.display =
-"block";
-
-setStatus(
-"Browser cannot play this video format"
-);
-
-}}
-);
 
 function downloadFile() {{
-
-location.href =
-DOWNLOAD_URL;
-
+    location.href = DOWNLOAD_URL;
 }}
 
 function stream() {{
-
-videoPlayer.scrollIntoView({{
-behavior:"smooth",
-block:"center"
-}});
-
-playVideo();
-
-}}
-
-function togglePlayers() {{
-
-const players =
-document.getElementById(
-"players"
-);
-
-players.style.display =
-players.style.display === "block"
-? "none"
-: "block";
-
+    location.href = STREAM_URL;
 }}
 
 function telegramDownload() {{
+    if (!BOT_USERNAME) {{
+        setStatus("Telegram bot not ready");
+        return;
+    }}
 
-if (!BOT_USERNAME) {{
-
-setStatus(
-"Telegram bot not ready"
-);
-
-return;
-
+    location.href = "https://t.me/" + BOT_USERNAME;
 }}
 
-location.href =
-"https://t.me/"
-+
-BOT_USERNAME;
+function togglePlayers() {{
+    const players = document.getElementById("players");
 
+    players.style.display =
+        players.style.display === "block"
+        ? "none"
+        : "block";
 }}
 
 function openPlayer(player) {{
 
-let intent = "";
+    const encoded =
+        encodeURIComponent(STREAM_URL);
 
-if (player === "mx") {{
+    // Android intent URLs.
+    // If the installed player does not support this intent,
+    // the browser URL is used as fallback.
 
-intent =
-"intent://"
-+
-"{stream_no_scheme}"
-+
-"#Intent;scheme="
-+
-"{scheme};"
-+
-"package=com.mxtech.videoplayer.ad;"
-+
-"type=video/*;end;";
+    let intent = "";
 
-}}
+    if (player === "mx") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.mxtech.videoplayer.ad;" +
+        "type=video/*;end;";
+    }}
 
-else if (player === "vlc") {{
+    else if (player === "vlc") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=org.videolan.vlc;" +
+        "type=video/*;end;";
+    }}
 
-intent =
-"intent://"
-+
-"{stream_no_scheme}"
-+
-"#Intent;scheme="
-+
-"{scheme};"
-+
-"package=org.videolan.vlc;"
-+
-"type=video/*;end;";
+    else if (player === "playit") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.playit.videoplayer;" +
+        "type=video/*;end;";
+    }}
 
-}}
+    else if (player === "kmplayer") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.kmplayer;" +
+        "type=video/*;end;";
+    }}
 
-else if (player === "playit") {{
-
-intent =
-"intent://"
-+
-"{stream_no_scheme}"
-+
-"#Intent;scheme="
-+
-"{scheme};"
-+
-"package=com.playit.videoplayer;"
-+
-"type=video/*;end;";
-
-}}
-
-else if (player === "kmplayer") {{
-
-intent =
-"intent://"
-+
-"{stream_no_scheme}"
-+
-"#Intent;scheme="
-+
-"{scheme};"
-+
-"package=com.kmplayer;"
-+
-"type=video/*;end;";
-
-}}
-
-if (intent) {{
-
-location.href = intent;
-
-}} else {{
-
-location.href =
-STREAM_URL;
-
-}}
-
+    if (intent) {{
+        location.href = intent;
+    }} else {{
+        location.href = STREAM_URL;
+    }}
 }}
 
 </script>
 
 </body>
-
 </html>"""
-
 
 # ============================================================
 # DIRECT TELEGRAM PROXY
 # ============================================================
 
-@app.get(
-    "/{token}/{filename:path}"
-)
+@app.get("/{token}/{filename:path}")
 async def direct_proxy(
     token: str,
     filename: str,
     request: Request,
     action: str = "stream"
 ):
-
     row = get_file(token)
 
     if not row:
-
         raise HTTPException(
             status_code=404,
             detail="File not found"
         )
 
-    if is_expired(row):
-
-        delete_file_record(token)
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "This file link has expired "
-                "after 12 hours."
-            )
-        )
-
     real_filename = row["filename"]
 
     if filename != real_filename:
-
         raise HTTPException(
             status_code=404,
             detail="Filename mismatch"
         )
 
     try:
-
         message = await bot.get_messages(
             row["chat_id"],
             ids=row["message_id"]
         )
-
     except Exception as error:
-
-        print(
-            "[!] Telegram message lookup failed:",
-            error
-        )
-
+        print("[!] Telegram message lookup failed:", error)
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Could not access Telegram file"
-            )
+            detail="Could not access Telegram file"
         )
 
-    if (
-        not message
-        or not message.media
-    ):
-
+    if not message or not message.media:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Telegram file no longer exists"
-            )
+            detail="Telegram file no longer exists"
         )
 
-    file_size = int(
-        row["size"]
-    )
-
+    file_size = int(row["size"])
     mime = row["mime"]
+
+    # ---------------- DOWNLOAD ----------------
 
     if action.lower() == "download":
 
         async def download_generator():
-
             async for chunk in telegram_stream(
                 message,
                 offset=0,
                 length=file_size
             ):
-
                 yield chunk
 
         headers = {
-
-            "Content-Length":
-                str(file_size),
-
+            "Content-Length": str(file_size),
             "Content-Disposition":
-                (
-                    'attachment; filename="'
-                    +
-                    quote(real_filename)
-                    +
-                    '"'
-                ),
-
-            "Accept-Ranges":
-                "bytes"
+                f'attachment; filename="{quote(real_filename)}"',
+            "Accept-Ranges": "bytes"
         }
 
         return StreamingResponse(
@@ -1851,19 +996,16 @@ async def direct_proxy(
             headers=headers
         )
 
-    range_header = request.headers.get(
-        "range"
-    )
+    # ---------------- STREAM ----------------
+
+    range_header = request.headers.get("range")
 
     try:
-
         start, end = parse_range(
             range_header,
             file_size
         )
-
     except Exception:
-
         raise HTTPException(
             status_code=416,
             detail="Invalid range",
@@ -1873,61 +1015,32 @@ async def direct_proxy(
             }
         )
 
-    length = (
-        end
-        - start
-        + 1
-    )
+    length = end - start + 1
 
     async def stream_generator():
-
         async for chunk in telegram_stream(
             message,
             offset=start,
             length=length
         ):
-
             yield chunk
 
     headers = {
-
-        "Accept-Ranges":
-            "bytes",
-
-        "Content-Length":
-            str(length),
-
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length),
         "Content-Range":
-            (
-                f"bytes "
-                f"{start}-{end}/"
-                f"{file_size}"
-            ),
-
+            f"bytes {start}-{end}/{file_size}",
         "Content-Disposition":
-            (
-                'inline; filename="'
-                +
-                quote(real_filename)
-                +
-                '"'
-            ),
-
-        "Cache-Control":
-            "no-cache"
+            f'inline; filename="{quote(real_filename)}"',
+        "Cache-Control": "no-cache"
     }
 
     return StreamingResponse(
         stream_generator(),
-        status_code=(
-            206
-            if range_header
-            else 200
-        ),
+        status_code=206 if range_header else 200,
         media_type=mime,
         headers=headers
     )
-
 
 # ============================================================
 # MAIN
@@ -1941,15 +1054,10 @@ async def main():
 
     print()
     print("=" * 65)
-    print(
-        "       TELEGRAM DIRECT PROXY — STADY-PROXY"
-    )
+    print("       TELEGRAM DIRECT PROXY — STADY-PROXY")
     print("=" * 65)
 
-    print()
-    print(
-        "[+] Connecting to Telegram..."
-    )
+    print("\n[+] Connecting to Telegram...")
 
     await bot.start(
         bot_token=BOT_TOKEN
@@ -1963,41 +1071,12 @@ async def main():
         else str(me.id)
     )
 
-    print(
-        "[+] Telegram connected"
-    )
-
-    print(
-        f"[+] Bot: @{BOT_USERNAME}"
-    )
-
-    print(
-        f"[+] Public URL: {PUBLIC_URL}"
-    )
-
-    print(
-        f"[+] Local URL: http://127.0.0.1:{PORT}"
-    )
-
-    print(
-        "[+] Link lifetime: 12 hours"
-    )
-
-    print(
-        "[+] Bot-message auto-delete: ENABLED"
-    )
-
-    print(
-        "[+] Server ready"
-    )
-
+    print(f"[+] Telegram connected")
+    print(f"[+] Bot: @{BOT_USERNAME}")
+    print(f"[+] Public URL: {PUBLIC_URL}")
+    print(f"[+] Local URL: http://127.0.0.1:{PORT}")
+    print("[+] Server ready")
     print("=" * 65)
-
-    await cleanup_expired_files()
-
-    cleanup_task = asyncio.create_task(
-        cleanup_loop()
-    )
 
     config = uvicorn.Config(
         app,
@@ -2007,45 +1086,16 @@ async def main():
         log_level="info"
     )
 
-    server = uvicorn.Server(
-        config
-    )
+    server = uvicorn.Server(config)
 
     try:
-
         await server.serve()
-
     finally:
-
-        cleanup_task.cancel()
-
-        try:
-            await cleanup_task
-
-        except asyncio.CancelledError:
-            pass
-
-        print(
-            "[+] Disconnecting Telegram..."
-        )
-
+        print("[+] Disconnecting Telegram...")
         await bot.disconnect()
 
-
-# ============================================================
-# START
-# ============================================================
-
 if __name__ == "__main__":
-
     try:
-
-        asyncio.run(
-            main()
-        )
-
+        asyncio.run(main())
     except KeyboardInterrupt:
-
-        print(
-            "\n[+] Server stopped."
-        )
+        print("\n[+] Server stopped.")
