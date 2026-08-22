@@ -390,104 +390,7 @@ def get_proxy_users():
     except Exception as error:
 
         print(
-            "[SECURITY] PostgreSQL users error:",
-            error
-        )
-
-        return []
-
-
-def get_user_files(user_id):
-
-    try:
-
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            cursor_factory=RealDictCursor
-        ) as db:
-
-            with db.cursor() as cursor:
-
-                cursor.execute("""
-                    SELECT
-                        token,
-                        filename,
-                        size,
-                        mime
-                    FROM files
-                    WHERE chat_id = %s
-                    ORDER BY token DESC
-                """, (
-                    int(user_id),
-                ))
-
-                return cursor.fetchall()
-
-    except Exception as error:
-
-        print(
-            "[SECURITY] PostgreSQL files error:",
-            error
-        )
-
-        return []
-
-
-def purge_user_files(user_id):
-
-    try:
-
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require"
-        ) as db:
-
-            with db.cursor() as cursor:
-
-                cursor.execute("""
-                    DELETE FROM files
-                    WHERE chat_id = %s
-                """, (
-                    int(user_id),
-                ))
-
-                removed = cursor.rowcount
-
-            db.commit()
-
-            return removed
-
-    except Exception as error:
-
-        print(
-            "[SECURITY] PostgreSQL purge error:",
-            error
-        )
-
-        return 0
-
-
-def purge_all_blocked_users():
-
-    blocked = get_blocked_users()
-
-    total_removed = 0
-
-    for row in blocked:
-
-        user_id = int(
-            row["user_id"]
-        )
-
-        removed = purge_user_files(
-            user_id
-        )
-
-        total_removed += removed
-
-    return total_removed
-# ============================================================
+   # ============================================================
 # STADY-PROXY FILE DATABASE — NEON POSTGRESQL
 # ============================================================
 
@@ -495,11 +398,7 @@ def get_proxy_users():
 
     try:
 
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            cursor_factory=RealDictCursor
-        ) as db:
+        with files_pg_db() as db:
 
             with db.cursor() as cursor:
 
@@ -528,11 +427,7 @@ def get_user_files(user_id):
 
     try:
 
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            cursor_factory=RealDictCursor
-        ) as db:
+        with files_pg_db() as db:
 
             with db.cursor() as cursor:
 
@@ -565,10 +460,7 @@ def purge_user_files(user_id):
 
     try:
 
-        with psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require"
-        ) as db:
+        with files_pg_db() as db:
 
             with db.cursor() as cursor:
 
@@ -614,7 +506,6 @@ def purge_all_blocked_users():
         total_removed += removed
 
     return total_removed
-
 # ============================================================
 # ADMIN CHECK
 # ============================================================
