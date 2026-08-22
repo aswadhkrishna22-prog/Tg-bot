@@ -130,8 +130,17 @@ async def stats_command(event):
         ram = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 
+<<<<<<< HEAD
         # ===== STORAGE BREAKDOWN =====
         storage_items = []
+=======
+        # ====================================================
+        # STORAGE BREAKDOWN
+        # ====================================================
+
+        storage_items = []
+
+>>>>>>> 6386925 (Add storage breakdown to stats)
         try:
             for item in BASE_DIR.iterdir():
                 try:
@@ -140,17 +149,25 @@ async def stats_command(event):
 
                     elif item.is_dir():
                         item_size = 0
+<<<<<<< HEAD
+=======
+
+>>>>>>> 6386925 (Add storage breakdown to stats)
                         for f in item.rglob("*"):
                             try:
                                 if f.is_file():
                                     item_size += f.stat().st_size
                             except (PermissionError, OSError):
+<<<<<<< HEAD
                                 # Skip files we can't access
+=======
+>>>>>>> 6386925 (Add storage breakdown to stats)
                                 continue
 
                     else:
                         continue
 
+<<<<<<< HEAD
                     storage_items.append((item_size, item.name))
 
                 except (PermissionError, OSError):
@@ -159,6 +176,20 @@ async def stats_command(event):
 
             # sort by size descending
             storage_items.sort(key=lambda x: x[0], reverse=True)
+=======
+                    storage_items.append(
+                        (item_size, item.name)
+                    )
+
+                except (PermissionError, OSError):
+                    continue
+
+            storage_items.sort(
+                key=lambda x: x[0],
+                reverse=True
+            )
+
+>>>>>>> 6386925 (Add storage breakdown to stats)
             storage_items = storage_items[:8]
 
         except Exception:
@@ -166,12 +197,24 @@ async def stats_command(event):
 
         if storage_items:
             storage_text = "\n".join(
+<<<<<<< HEAD
                 f"📁 {html.escape(name)}: <code>{size / 1024**3:.2f} GB</code>"
+=======
+                f"📁 {html.escape(name)}: "
+                f"<code>{size / 1024**3:.2f} GB</code>"
+>>>>>>> 6386925 (Add storage breakdown to stats)
                 for size, name in storage_items
             )
         else:
             storage_text = "Unable to read storage breakdown."
+<<<<<<< HEAD
         # ===== END STORAGE BREAKDOWN =====
+=======
+
+        # ====================================================
+        # UPTIME
+        # ====================================================
+>>>>>>> 6386925 (Add storage breakdown to stats)
 
         bot_uptime = format_uptime(
             time.time() - BOT_START_TIME
@@ -181,13 +224,23 @@ async def stats_command(event):
             time.time() - psutil.boot_time()
         )
 
+        # ====================================================
+        # DATABASE
+        # ====================================================
+
         db_status = "✅ ONLINE"
 
         try:
             with db_connect() as db:
                 db.execute("SELECT 1").fetchone()
         except Exception as error:
-            db_status = f"❌ ERROR: {error}"
+            db_status = (
+                f"❌ ERROR: {html.escape(str(error))}"
+            )
+
+        # ====================================================
+        # TELEGRAM STATUS
+        # ====================================================
 
         try:
             telegram_status = (
@@ -198,6 +251,10 @@ async def stats_command(event):
         except Exception:
             telegram_status = "❌ UNKNOWN"
 
+        # ====================================================
+        # REGISTERED FILES
+        # ====================================================
+
         total_files = 0
 
         try:
@@ -207,8 +264,13 @@ async def stats_command(event):
                 ).fetchone()
 
                 total_files = int(result["total"])
+
         except Exception:
             total_files = 0
+
+        # ====================================================
+        # MESSAGE
+        # ====================================================
 
         message = (
             "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
@@ -221,41 +283,61 @@ async def stats_command(event):
             f"🌐 SERVER: ✅ ONLINE\n"
             f"🗄️ DATABASE: {db_status}\n\n"
 
-            f"⏱️ BOT UPTIME: <code>{bot_uptime}</code>\n"
-            f"🖥️ SYS UPTIME: <code>{system_uptime}</code>\n\n"
+            f"⏱️ BOT UPTIME: "
+            f"<code>{bot_uptime}</code>\n"
+
+            f"🖥️ SYS UPTIME: "
+            f"<code>{system_uptime}</code>\n\n"
 
             f"⚙️ CPU: {usage_bar(cpu)} "
             f"<code>{cpu:.1f}%</code>\n\n"
 
             f"🧠 RAM: {usage_bar(ram.percent)} "
             f"<code>{ram.percent:.1f}%</code>\n"
+
             f"RAM In Use: "
             f"<code>{ram.used / 1024**3:.2f} GB</code>\n"
+
             f"RAM Total: "
             f"<code>{ram.total / 1024**3:.2f} GB</code>\n"
+
             f"RAM Free: "
             f"<code>{ram.available / 1024**3:.2f} GB</code>\n\n"
 
             f"💾 DISK: {usage_bar(disk.percent)} "
             f"<code>{disk.percent:.1f}%</code>\n"
+
             f"Drive In Use: "
             f"<code>{disk.used / 1024**3:.2f} GB</code>\n"
+
             f"Drive Total: "
             f"<code>{disk.total / 1024**3:.2f} GB</code>\n"
+
             f"Drive Free: "
             f"<code>{disk.free / 1024**3:.2f} GB</code>\n\n"
 
+<<<<<<< HEAD
             f"📂 <b>STORAGE BREAKDOWN</b>\n"
+=======
+            "📂 <b>STORAGE BREAKDOWN</b>\n"
+>>>>>>> 6386925 (Add storage breakdown to stats)
             f"{storage_text}\n\n"
 
             f"📦 REGISTERED FILES: "
             f"<code>{total_files}</code>\n\n"
 
-            f"🛠️ LAST ERROR:\n"
+            "🛠️ LAST ERROR:\n"
             f"<code>{html.escape(str(LAST_ERROR))}</code>\n\n"
 
             "━━━━━━━━━━━━━━━━━━━━━━\n"
+<<<<<<< HEAD
             '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>'
+=======
+            '❤️ Made with '
+            '<a href="https://www.instagram.com/2aswadhh_._kr">'
+            'aswadh_kr'
+            "</a>"
+>>>>>>> 6386925 (Add storage breakdown to stats)
         )
 
         await event.reply(
@@ -264,7 +346,11 @@ async def stats_command(event):
         )
 
     except Exception as error:
-        print("[!] Stats command error:", error)
+
+        print(
+            "[!] Stats command error:",
+            error
+        )
 
         await event.reply(
             "❌ <b>STATS ERROR</b>\n\n"
