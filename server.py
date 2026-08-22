@@ -243,23 +243,25 @@ async def stats_command(event):
         except Exception:
             telegram_status = "❌ UNKNOWN"
 
+        
         total_files = 0
 
         try:
             with db_connect() as db:
-            with db.cursor() as cursor:
+                with db.cursor() as cursor:
 
-                cursor.execute(
-                     "SELECT COUNT(*) AS total FROM files"
-        )
+                    cursor.execute(
+                        "SELECT COUNT(*) AS total FROM files"
+                    )
 
-        result = cursor.fetchone()
+                    result = cursor.fetchone()
 
-        total_files = int(
-            result["total"]
-            if result is not None
-            else 0
-        )
+                    total_files = int(
+                        result["total"]
+                        if result is not None
+                        else 0
+                    )
+
         except Exception:
             total_files = 0
 
