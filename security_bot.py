@@ -442,7 +442,7 @@ async def users_command(event):
     if not users:
 
         await event.reply(
-            "📭 No users/files not found "
+            "📭 No users/files found "
         )
 
         return
