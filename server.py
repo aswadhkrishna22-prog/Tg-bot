@@ -372,8 +372,8 @@ async def receive_file(event):
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
-    
-await event.reply(
+
+    await event.reply(
     "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
     "        ⚡ STADY-PROXY\n"
     "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
