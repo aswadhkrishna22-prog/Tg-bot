@@ -423,7 +423,14 @@ async def start_command(event):
         pattern=r"^/users$"
     )
 )
-async def users_command(event):
+async async def users_command(event):
+
+    print(
+        "[DEBUG /users] sender_id:",
+        event.sender_id,
+        "owner_id:",
+        OWNER_ID
+    )
 
     if not is_admin(event):
         return
