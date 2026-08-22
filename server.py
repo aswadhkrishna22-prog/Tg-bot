@@ -246,12 +246,19 @@ async def stats_command(event):
 
         try:
             with db_connect() as db:
-                result = db.execute(
-                    "SELECT COUNT(*) AS total FROM files"
-                ).fetchone()
+            with db.cursor() as cursor:
 
-                total_files = int(result[0] if result is not None else 0)
+                cursor.execute(
+                     "SELECT COUNT(*) AS total FROM files"
+        )
 
+        result = cursor.fetchone()
+
+        total_files = int(
+            result["total"]
+            if result is not None
+            else 0
+        )
         except Exception:
             total_files = 0
 
