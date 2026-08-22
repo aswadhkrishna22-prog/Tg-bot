@@ -175,8 +175,7 @@ async def stats_command(event):
         )
 
         db_status = "✅ ONLINE"
-
-try: 
+try:
     with db_connect() as db:
         with db.cursor() as cursor:
             cursor.execute("SELECT 1")
