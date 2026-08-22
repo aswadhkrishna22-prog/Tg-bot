@@ -123,48 +123,12 @@ def usage_bar(percent, total=10):
 
 @bot.on(events.NewMessage(pattern=r"^/stats$"))
 async def stats_command(event):
+
     try:
         cpu = psutil.cpu_percent(interval=0.5)
+
         ram = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
-
-        storage_items = []
-
-        try:
-            for item in BASE_DIR.iterdir():
-                try:
-                    if item.is_file():
-                        item_size = item.stat().st_size
-                    elif item.is_dir():
-                        item_size = 0
-                        for f in item.rglob("*"):
-                            try:
-                                if f.is_file():
-                                    item_size += f.stat().st_size
-                            except (PermissionError, OSError):
-                                continue
-                    else:
-                        continue
-
-                    storage_items.append((item_size, item.name))
-
-                except (PermissionError, OSError):
-                    continue
-
-            storage_items.sort(key=lambda x: x[0], reverse=True)
-            storage_items = storage_items[:8]
-
-        except Exception:
-            storage_items = []
-
-        if storage_items:
-            storage_text = "\n".join(
-                f"📁 {html.escape(name)}: "
-                f"<code>{size / 1024**3:.2f} GB</code>"
-                for size, name in storage_items
-            )
-        else:
-            storage_text = "Unable to read storage breakdown."
 
         bot_uptime = format_uptime(
             time.time() - BOT_START_TIME
@@ -180,7 +144,7 @@ async def stats_command(event):
             with db_connect() as db:
                 db.execute("SELECT 1").fetchone()
         except Exception as error:
-            db_status = f"❌ ERROR: {html.escape(str(error))}"
+            db_status = f"❌ ERROR: {error}"
 
         try:
             telegram_status = (
@@ -198,6 +162,7 @@ async def stats_command(event):
                 result = db.execute(
                     "SELECT COUNT(*) AS total FROM files"
                 ).fetchone()
+
                 total_files = int(result["total"])
         except Exception:
             total_files = 0
@@ -206,6 +171,7 @@ async def stats_command(event):
             "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
             "        ⚡ STADY-PROXY\n"
             "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+
             "📊 <b>SERVER STATISTICS</b>\n\n"
 
             f"🤖 BOT STATUS: {telegram_status}\n"
@@ -220,29 +186,30 @@ async def stats_command(event):
 
             f"🧠 RAM: {usage_bar(ram.percent)} "
             f"<code>{ram.percent:.1f}%</code>\n"
-            f"RAM In Use: <code>{ram.used / 1024**3:.2f} GB</code>\n"
-            f"RAM Total: <code>{ram.total / 1024**3:.2f} GB</code>\n"
-            f"RAM Free: <code>{ram.available / 1024**3:.2f} GB</code>\n\n"
+            f"RAM In Use: "
+            f"<code>{ram.used / 1024**3:.2f} GB</code>\n"
+            f"RAM Total: "
+            f"<code>{ram.total / 1024**3:.2f} GB</code>\n"
+            f"RAM Free: "
+            f"<code>{ram.available / 1024**3:.2f} GB</code>\n\n"
 
             f"💾 DISK: {usage_bar(disk.percent)} "
             f"<code>{disk.percent:.1f}%</code>\n"
-            f"Drive In Use: <code>{disk.used / 1024**3:.2f} GB</code>\n"
-            f"Drive Total: <code>{disk.total / 1024**3:.2f} GB</code>\n"
-            f"Drive Free: <code>{disk.free / 1024**3:.2f} GB</code>\n\n"
+            f"Drive In Use: "
+            f"<code>{disk.used / 1024**3:.2f} GB</code>\n"
+            f"Drive Total: "
+            f"<code>{disk.total / 1024**3:.2f} GB</code>\n"
+            f"Drive Free: "
+            f"<code>{disk.free / 1024**3:.2f} GB</code>\n\n"
 
-            "📂 <b>STORAGE BREAKDOWN</b>\n"
-            f"{storage_text}\n\n"
+            f"📦 REGISTERED FILES: "
+            f"<code>{total_files}</code>\n\n"
 
-            f"📦 REGISTERED FILES: <code>{total_files}</code>\n\n"
-
-            "🛠️ LAST ERROR:\n"
+            f"🛠️ LAST ERROR:\n"
             f"<code>{html.escape(str(LAST_ERROR))}</code>\n\n"
 
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            '❤️ Made with '
-            '<a href="https://www.instagram.com/2aswadhh_._kr">'
-            'aswadh_kr'
-            "</a>"
+            "❤️ Made with @aswadhh_kr"
         )
 
         await event.reply(
@@ -251,14 +218,13 @@ async def stats_command(event):
         )
 
     except Exception as error:
-        print("[] Stats command error:", error)
+        print("[!] Stats command error:", error)
 
         await event.reply(
             "❌ <b>STATS ERROR</b>\n\n"
             f"<code>{html.escape(str(error))}</code>",
             parse_mode="html"
         )
-
 
 # ============================================================
 # HELPERS
@@ -378,7 +344,6 @@ async def receive_file(event):
         )
 
         stream_url = f"{PUBLIC_URL}/watch/{token}"
-
         size_gb = size / 1024 / 1024 / 1024
 
         print("\n" + "=" * 60)
@@ -388,24 +353,11 @@ async def receive_file(event):
         print("[+] Token:", token)
         print("=" * 60)
 
-        from telethon import Button
-
-        buttons = [
-            [
-                Button.url(
-                    "▶️ WATCH / STREAM",
-                    stream_url
-                )
-            ]
-        ]
-
         await event.reply(
-            "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
-            f"🎬 <b>{html.escape(filename)}</b>\n"
-            f"📦 Size: <code>{size_gb:.2f} GB</code>\n\n"
-            "Choose an option below:",
-            buttons=buttons,
-            parse_mode="html"
+            "✅ STADY-PROXY file ready!\n\n"
+            f"🎬 {filename}\n"
+            f"📦 Size: {size_gb:.2f} GB\n\n"
+            f"▶️ Watch / Stream:\n{stream_url}"
         )
 
     except Exception as error:
@@ -413,51 +365,49 @@ async def receive_file(event):
 
         try:
             await event.reply(
-                "❌ <b>Could not create file link.</b>\n\n"
-                f"<code>{html.escape(str(error))}</code>",
-                parse_mode="html"
+                f"❌ Could not create stream link.\n\n{error}"
             )
         except Exception:
             pass
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
+
     await event.reply(
-        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-        "        ⚡ STADY-PROXY\n"
-        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+    "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+    "        ⚡ STADY-PROXY\n"
+    "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
 
-        "🎬 FILE → STREAM → DOWNLOAD\n\n"
+    "🎬 FILE → STREAM → DOWNLOAD\n\n"
 
-        "Send me any video or file and\n"
-        "I'll instantly create a browser\n"
-        "streaming & download link for you.\n\n"
+    "Send me any video or file and\n"
+    "I'll instantly create a browser\n"
+    "streaming & download link for you.\n\n"
 
-        "✨ FEATURES\n\n"
+    "✨ FEATURES\n\n"
 
-        "▶️ Fast Browser Streaming\n"
-        "☁️ Direct Download\n"
-        "📱 Mobile Friendly\n"
-        "🔗 Easy Link Sharing\n"
-        "📦 Supports MP4, MKV, MP3, APK,\n"
-        "   ZIP, PDF & many more formats\n\n"
+    "▶️ Fast Browser Streaming\n"
+    "☁️ Direct Download\n"
+    "📱 Mobile Friendly\n"
+    "🔗 Easy Link Sharing\n"
+    "📦 Supports MP4, MKV, MP3, APK,\n"
+    "   ZIP, PDF & many more formats\n\n"
 
-        "⏳ 12-HOUR LINK\n"
-        "Your generated link stays active\n"
-        "for 12 hours only.\n\n"
+    "⏳ 12-HOUR LINK\n"
+    "Your generated link stays active\n"
+    "for 12 hours only.\n\n"
 
-        "🗑️ AUTO CLEANUP\n"
-        "Generated bot messages are\n"
-        "automatically deleted after 12 hours.\n\n"
+    "🗑️ AUTO CLEANUP\n"
+    "Generated bot messages are\n"
+    "automatically deleted after 12 hours.\n\n"
 
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-        "📤 Send your file to get started.\n\n"
+    "📤 Send your file to get started.\n\n"
 
-        '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>',
-        parse_mode="html"
-    )
-
+    '❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr">aswadh_kr</a>',
+    parse_mode="html"
+)
 # ============================================================
 # STADY-PROXY THEME
 # IMPORTANT:
@@ -522,6 +472,660 @@ body:before{
         0 0 8px #00eaff,
         0 0 22px #7c28ff,
         0 0 40px #ff18d5;
-}"""
+}
 
-# (file continues unchanged)
+.frame{
+    position:relative;
+    padding:12px;
+    border:2px solid #42eaff;
+    border-radius:15px;
+    background:
+        linear-gradient(
+            145deg,
+            rgba(12,43,72,.9),
+            rgba(4,13,28,.94)
+        );
+    box-shadow:
+        0 0 10px #00eaff,
+        inset 0 0 20px rgba(0,234,255,.15),
+        0 0 30px rgba(255,0,213,.2);
+}
+
+.frame:before,
+.frame:after{
+    content:"";
+    position:absolute;
+    height:5px;
+    width:90px;
+    top:-5px;
+    background:linear-gradient(
+        90deg,
+        #00eaff,
+        #bdfcff,
+        #ff24d7
+    );
+    box-shadow:0 0 12px #00eaff;
+    border-radius:4px;
+}
+
+.frame:before{left:35px}
+.frame:after{right:35px}
+
+.poster{
+    position:relative;
+    overflow:hidden;
+    border:2px solid #36f3ff;
+    border-radius:8px;
+    aspect-ratio:16/9;
+    background:#0a2039;
+    box-shadow:
+        inset 0 0 22px rgba(0,255,255,.35),
+        0 0 14px rgba(0,234,255,.45);
+}
+
+.poster img{
+    width:100%;
+    height:100%;
+    display:block;
+    object-fit:cover;
+}
+
+.play{
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    width:118px;
+    height:82px;
+    border:2px solid #9afcff;
+    border-radius:16px;
+    background:rgba(75,90,112,.58);
+    backdrop-filter:blur(5px);
+    color:#dffcff;
+    font-size:44px;
+    line-height:78px;
+    text-align:center;
+    text-shadow:0 0 10px #00eaff;
+    box-shadow:0 0 18px rgba(0,238,255,.35);
+    cursor:pointer;
+}
+
+.actions{
+    display:grid;
+    gap:14px;
+    margin:18px 0;
+}
+
+.btn{
+    appearance:none;
+    border:2px solid #38f5ff;
+    border-radius:10px;
+    padding:15px 12px;
+    width:100%;
+    font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
+    color:#eaffff;
+    cursor:pointer;
+    background:
+        linear-gradient(
+            180deg,
+            rgba(17,72,103,.95),
+            rgba(10,33,62,.98)
+        );
+    box-shadow:
+        0 0 9px rgba(0,238,255,.75),
+        inset 0 0 16px rgba(0,238,255,.12),
+        0 5px 0 rgba(255,0,204,.35);
+    transition:.18s transform,.18s filter;
+}
+
+.btn:hover{
+    filter:brightness(1.25);
+    transform:translateY(-2px);
+}
+
+.btn:active{
+    transform:translateY(1px);
+}
+
+.players{
+    display:none;
+    border-radius:0 0 18px 18px;
+    background:#101b28;
+    margin-top:-14px;
+    padding:22px 12px 18px;
+    text-align:center;
+    box-shadow:0 8px 18px rgba(0,0,0,.35);
+    font-size:18px;
+}
+
+.players button{
+    display:block;
+    width:100%;
+    border:0;
+    background:none;
+    color:#f0f5ff;
+    font:inherit;
+    padding:8px;
+    cursor:pointer;
+}
+
+.players button:hover{
+    color:#56efff;
+}
+
+.info{
+    margin-top:14px;
+    padding:16px 4px 8px;
+    font-size:16px;
+    line-height:2;
+    color:#e7f4ff;
+}
+
+.info div{
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.info b{
+    font-weight:500;
+}
+
+.status{
+    font-size:13px;
+    color:#8edfff;
+    text-align:center;
+    margin-top:8px;
+    opacity:.8;
+}
+
+@media(max-width:480px){
+    .page{
+        padding-left:9px;
+        padding-right:9px;
+    }
+
+    .frame{
+        padding:9px;
+    }
+
+    .play{
+        width:95px;
+        height:68px;
+        line-height:64px;
+        font-size:34px;
+    }
+
+    .info{
+        font-size:14px;
+    }
+}
+"""
+
+# ============================================================
+# HOME
+# ============================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STADY-PROXY</title>
+<style>{STADY_CSS}</style>
+</head>
+<body>
+<main class="page">
+    <div class="brand">STADY-PROXY</div>
+
+    <section class="frame">
+        <div class="poster">
+            <img src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85">
+        </div>
+
+        <div class="status"
+             style="font-size:20px;margin:25px 0;">
+            SERVER ONLINE 🚀
+        </div>
+    </section>
+</main>
+</body>
+</html>"""
+
+# ============================================================
+# WATCH PAGE
+# ============================================================
+
+@app.get("/watch/{token}", response_class=HTMLResponse)
+async def watch(token):
+    row = get_file(token)
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
+
+    filename = row["filename"]
+    safe_name = html.escape(filename)
+    encoded_filename = quote(filename, safe="")
+
+    stream_url = (
+        f"{PUBLIC_URL}/{token}/{encoded_filename}?action=stream"
+    )
+
+    download_url = (
+        f"{PUBLIC_URL}/{token}/{encoded_filename}?action=download"
+    )
+
+    file_size = int(row["size"])
+
+    if file_size >= 1024**3:
+        size_str = f"{file_size / 1024**3:.2f} GB"
+    elif file_size >= 1024**2:
+        size_str = f"{file_size / 1024**2:.2f} MB"
+    else:
+        size_str = f"{file_size / 1024:.2f} KB"
+
+    created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    stream_no_scheme = (
+        stream_url
+        .replace("https://", "")
+        .replace("http://", "")
+    )
+
+    scheme = "https" if stream_url.startswith("https://") else "http"
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+
+<title>STADY-PROXY | {safe_name}</title>
+<style>{STADY_CSS}</style>
+</head>
+
+<body>
+
+<main class="page">
+
+<div class="brand">STADY-PROXY</div>
+
+<section class="frame">
+
+<div class="poster">
+
+<img
+src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
+alt="Video thumbnail">
+
+<button class="play"
+        aria-label="Play"
+        onclick="stream()">▶</button>
+
+</div>
+
+<div class="actions">
+
+<button class="btn"
+        onclick="downloadFile()">
+☁️ Download ☁️
+</button>
+
+<button class="btn"
+        onclick="togglePlayers()">
+⏵ Stream ⏵
+</button>
+
+<div class="players" id="players">
+
+<button onclick="openPlayer('mx')">
+MX Player
+</button>
+
+<button onclick="openPlayer('vlc')">
+VLC Mobile
+</button>
+
+<button onclick="openPlayer('playit')">
+PlayIt
+</button>
+
+<button onclick="openPlayer('splayer')">
+SPlayer
+</button>
+
+<button onclick="openPlayer('jplayer')">
+JPlayer
+</button>
+
+<button onclick="openPlayer('kmplayer')">
+KMPlayer
+</button>
+
+<button onclick="openPlayer('hdplayer')">
+HDPlayer
+</button>
+
+<button onclick="openPlayer('nplayer')">
+nPlayer
+</button>
+
+</div>
+
+<button class="btn"
+        onclick="telegramDownload()">
+✈️ Telegram Download ✈️
+</button>
+
+</div>
+
+<div class="info">
+
+<div>
+📄 <b>File Name:</b>
+<span>{safe_name}</span>
+</div>
+
+<div>
+☰ <b>File Size:</b>
+<span>{size_str}</span>
+</div>
+
+<div>
+👤 <b>File Owner:</b>
+<span>STADY-PROXY</span>
+</div>
+
+<div>
+◷ <b>Created Time:</b>
+<span>{created}</span>
+</div>
+
+</div>
+
+</section>
+
+<div class="status" id="status">
+STADY-PROXY • READY
+</div>
+
+</main>
+
+<script>
+
+const STREAM_URL = {stream_url!r};
+const DOWNLOAD_URL = {download_url!r};
+const BOT_USERNAME = {BOT_USERNAME!r};
+
+function setStatus(text) {{
+    document.getElementById("status").textContent = text;
+}}
+
+function downloadFile() {{
+    location.href = DOWNLOAD_URL;
+}}
+
+function stream() {{
+    location.href = STREAM_URL;
+}}
+
+function telegramDownload() {{
+    if (!BOT_USERNAME) {{
+        setStatus("Telegram bot not ready");
+        return;
+    }}
+
+    location.href = "https://t.me/" + BOT_USERNAME;
+}}
+
+function togglePlayers() {{
+    const players = document.getElementById("players");
+
+    players.style.display =
+        players.style.display === "block"
+        ? "none"
+        : "block";
+}}
+
+function openPlayer(player) {{
+
+    const encoded =
+        encodeURIComponent(STREAM_URL);
+
+    // Android intent URLs.
+    // If the installed player does not support this intent,
+    // the browser URL is used as fallback.
+
+    let intent = "";
+
+    if (player === "mx") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.mxtech.videoplayer.ad;" +
+        "type=video/*;end;";
+    }}
+
+    else if (player === "vlc") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=org.videolan.vlc;" +
+        "type=video/*;end;";
+    }}
+
+    else if (player === "playit") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.playit.videoplayer;" +
+        "type=video/*;end;";
+    }}
+
+    else if (player === "kmplayer") {{
+        intent =
+        "intent://" +
+        "{stream_no_scheme}" +
+        "#Intent;scheme={scheme};" +
+        "package=com.kmplayer;" +
+        "type=video/*;end;";
+    }}
+
+    if (intent) {{
+        location.href = intent;
+    }} else {{
+        location.href = STREAM_URL;
+    }}
+}}
+
+</script>
+
+</body>
+</html>"""
+
+# ============================================================
+# DIRECT TELEGRAM PROXY
+# ============================================================
+
+@app.get("/{token}/{filename:path}")
+async def direct_proxy(
+    token: str,
+    filename: str,
+    request: Request,
+    action: str = "stream"
+):
+    row = get_file(token)
+
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="File not found"
+        )
+
+    real_filename = row["filename"]
+
+    if filename != real_filename:
+        raise HTTPException(
+            status_code=404,
+            detail="Filename mismatch"
+        )
+
+    try:
+        message = await bot.get_messages(
+            row["chat_id"],
+            ids=row["message_id"]
+        )
+    except Exception as error:
+        print("[!] Telegram message lookup failed:", error)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not access Telegram file"
+        )
+
+    if not message or not message.media:
+        raise HTTPException(
+            status_code=404,
+            detail="Telegram file no longer exists"
+        )
+
+    file_size = int(row["size"])
+    mime = row["mime"]
+
+    # ---------------- DOWNLOAD ----------------
+
+    if action.lower() == "download":
+
+        async def download_generator():
+            async for chunk in telegram_stream(
+                message,
+                offset=0,
+                length=file_size
+            ):
+                yield chunk
+
+        headers = {
+            "Content-Length": str(file_size),
+            "Content-Disposition":
+                f'attachment; filename="{quote(real_filename)}"',
+            "Accept-Ranges": "bytes"
+        }
+
+        return StreamingResponse(
+            download_generator(),
+            status_code=200,
+            media_type=mime,
+            headers=headers
+        )
+
+    # ---------------- STREAM ----------------
+
+    range_header = request.headers.get("range")
+
+    try:
+        start, end = parse_range(
+            range_header,
+            file_size
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid range",
+            headers={
+                "Content-Range":
+                    f"bytes */{file_size}"
+            }
+        )
+
+    length = end - start + 1
+
+    async def stream_generator():
+        async for chunk in telegram_stream(
+            message,
+            offset=start,
+            length=length
+        ):
+            yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length),
+        "Content-Range":
+            f"bytes {start}-{end}/{file_size}",
+        "Content-Disposition":
+            f'inline; filename="{quote(real_filename)}"',
+        "Cache-Control": "no-cache"
+    }
+
+    return StreamingResponse(
+        stream_generator(),
+        status_code=206 if range_header else 200,
+        media_type=mime,
+        headers=headers
+    )
+
+# ============================================================
+# MAIN
+# ============================================================
+
+async def main():
+
+    global BOT_USERNAME
+
+    init_database()
+
+    print()
+    print("=" * 65)
+    print("       TELEGRAM DIRECT PROXY — STADY-PROXY")
+    print("=" * 65)
+
+    print("\n[+] Connecting to Telegram...")
+
+    await bot.start(
+        bot_token=BOT_TOKEN
+    )
+
+    me = await bot.get_me()
+
+    BOT_USERNAME = (
+        me.username
+        if me.username
+        else str(me.id)
+    )
+
+    print(f"[+] Telegram connected")
+    print(f"[+] Bot: @{BOT_USERNAME}")
+    print(f"[+] Public URL: {PUBLIC_URL}")
+    print(f"[+] Local URL: http://127.0.0.1:{PORT}")
+    print("[+] Server ready")
+    print("=" * 65)
+
+    config = uvicorn.Config(
+        app,
+        host=HOST,
+        port=PORT,
+        loop="asyncio",
+        log_level="info"
+    )
+
+    server = uvicorn.Server(config)
+
+    try:
+        await server.serve()
+    finally:
+        print("[+] Disconnecting Telegram...")
+        await bot.disconnect()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[+] Server stopped.")

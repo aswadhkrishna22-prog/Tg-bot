@@ -6,3 +6,13 @@ files/
 *.mkv
 *.mp4
 *.mkv
+
+.env
+.env.backup
+*.session
+*.session-journal
+*.db
+*.backup
+*.before-security
+*.before-conflict-fix
+server_backup.py
