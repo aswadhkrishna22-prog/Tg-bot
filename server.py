@@ -1398,10 +1398,14 @@ async def direct_proxy(
 
         "Content-Range":
             f"bytes {start}-{end}/{file_size}",
+            
+          "Content-Disposition": content_disposition,  
 
-        "Content-Disposition":
-            f'inline; filename="{quote(real_filename)}"',
-
+        content_disposition = (
+    f'attachment; filename="{quote(real_filename)}"'
+    if action == "download"
+    else f'inline; filename="{quote(real_filename)}"'
+)
         "Cache-Control": "no-cache"
     }
 
