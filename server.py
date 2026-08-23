@@ -1389,19 +1389,19 @@ async def direct_proxy(
         ):
 
             yield chunk
-content_disposition = (
-    f'attachment; filename="{quote(real_filename)}"'
-    if action == "download"
-    else f'inline; filename="{quote(real_filename)}"'
-)
+    content_disposition = (
+        f'attachment; filename="{quote(real_filename)}"'
+        if action == "download"
+        else f'inline; filename="{quote(real_filename)}"'
+    )
 
-headers = {
-    "Accept-Ranges": "bytes",
-    "Content-Length": str(length),
-    "Content-Range": f"bytes {start}-{end}/{file_size}",
-    "Content-Disposition": content_disposition,
-    "Cache-Control": "no-cache"
-}
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length),
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Content-Disposition": content_disposition,
+        "Cache-Control": "no-cache"
+    }
 
     return StreamingResponse(
         stream_generator(),
@@ -1412,8 +1412,7 @@ headers = {
         ),
         media_type=mime,
         headers=headers
-    )
-
+)
 
 # ============================================================
 # 12-HOUR AUTO CLEANUP
