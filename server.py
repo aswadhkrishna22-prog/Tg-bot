@@ -1212,6 +1212,28 @@ nPlayer
 STADY-PROXY • READY
 </div>
 
+<div style="
+    text-align:center;
+    margin-top:22px;
+    padding-bottom:8px;
+    font-size:14px;
+    color:#888;
+">
+    ❤️ Made with
+    <a
+        href="https://www.instagram.com/2aswadhh_._kr"
+        target="_blank"
+        rel="noopener noreferrer"
+        style="
+            color:inherit;
+            text-decoration:none;
+            font-weight:600;
+        "
+    >
+        📷 aswadh_kr
+    </a>
+</div>
+
 </main>
 
 <script>
