@@ -521,12 +521,86 @@ async def telegram_stream(
 # ============================================================
 
 @bot.on(events.NewMessage)
-async def receive_file(event):
+# ============================================================
+# FILE UPLOAD LIMIT / RATE LIMIT
+# ============================================================
+
+MAX_FILE_SIZE = 6 * 1024 * 1024 * 1024  # 6 GB
+FILE_COOLDOWN = 10  # seconds
+
+user_file_cooldowns = {}
+
+            async def receive_file(event):
 
     if not event.file:
         return
 
     try:
+
+        chat_id = int(event.chat_id)
+
+        # ====================================================
+        # FILE SIZE CHECK
+        # ====================================================
+
+        size = int(event.file.size or 0)
+
+        if size > MAX_FILE_SIZE:
+
+            size_gb = size / 1024 / 1024 / 1024
+
+            await event.reply(
+                "❌ <b>FILE TOO LARGE</b>\n\n"
+                f"📦 Your file: "
+                f"<code>{size_gb:.2f} GB</code>\n"
+                f"📏 Maximum allowed: "
+                f"<code>6 GB</code>",
+                parse_mode="html"
+            )
+
+            print(
+                f"[LIMIT] Rejected oversized file "
+                f"from {chat_id}: {size_gb:.2f} GB"
+            )
+
+            return
+
+        # ====================================================
+        # 10 SECOND PER-USER COOLDOWN
+        # ====================================================
+
+        now = time.monotonic()
+
+        last_upload = user_file_cooldowns.get(chat_id)
+
+        if last_upload is not None:
+
+            elapsed = now - last_upload
+
+            if elapsed < FILE_COOLDOWN:
+
+                remaining = FILE_COOLDOWN - elapsed
+
+                await event.reply(
+                    "⏳ <b>Please wait.</b>\n\n"
+                    f"You can send another file in "
+                    f"<code>{remaining:.1f} seconds</code>.",
+                    parse_mode="html"
+                )
+
+                print(
+                    f"[RATE LIMIT] User {chat_id} "
+                    f"must wait {remaining:.1f}s"
+                )
+
+                return
+
+        # Start cooldown only after passing the checks
+        user_file_cooldowns[chat_id] = now
+
+        # ====================================================
+        # FILENAME
+        # ====================================================
 
         filename = event.file.name
 
@@ -548,20 +622,26 @@ async def receive_file(event):
 
         filename = clean_filename(filename)
 
-        size = int(
-            event.file.size or 0
-        )
+        # ====================================================
+        # MIME
+        # ====================================================
 
         mime = (
             event.file.mime_type
             or get_mime(filename)
         )
 
+        # ====================================================
+        # TOKEN
+        # ====================================================
+
         token = uuid.uuid4().hex
 
-        chat_id = int(event.chat_id)
-
         message_id = int(event.id)
+
+        # ====================================================
+        # REGISTER FILE
+        # ====================================================
 
         add_file(
             token,
@@ -606,6 +686,10 @@ async def receive_file(event):
             "=" * 60
         )
 
+        # ====================================================
+        # WATCH BUTTON
+        # ====================================================
+
         buttons = [
             [
                 Button.url(
@@ -648,7 +732,6 @@ async def receive_file(event):
 
         except Exception:
             pass
-
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
