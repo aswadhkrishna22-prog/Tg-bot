@@ -1302,7 +1302,7 @@ function stream() {{
                 border-radius:18px;
             "
         >
-            <source src="${STREAM_URL}" type="video/mp4">
+            <source src="${{STREAM_URL}}" type="video/mp4">
             Your browser does not support video playback.
         </video>
     `;
