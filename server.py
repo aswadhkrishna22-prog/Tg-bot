@@ -1219,7 +1219,7 @@ STADY-PROXY • READY
     font-size:14px;
     color:#888;
 ">
-    ❤️ Made with
+     Made with ♥ by
     <a
         href="https://www.instagram.com/2aswadhh_._kr"
         target="_blank"
