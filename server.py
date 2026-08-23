@@ -515,22 +515,23 @@ async def telegram_stream(
             error
         )
 
+if elapsed < FILE_COOLDOWN:
 
-remaining = FILE_COOLDOWN - elapsed
+    remaining = FILE_COOLDOWN - elapsed
 
-                await event.reply(
-                    "⏳ <b>Please wait.</b>\n\n"
-                    f"You can send another file in "
-                    f"<code>{remaining:.1f} seconds</code>.",
-                    parse_mode="html"
-                )
+    await event.reply(
+        "⏳ <b>Please wait.</b>\n\n"
+        f"You can send another file in "
+        f"<code>{remaining:.1f} seconds</code>.",
+        parse_mode="html"
+    )
 
-                print(
-                    f"[RATE LIMIT] User {chat_id} "
-                    f"must wait {remaining:.1f}s"
-                )
+    print(
+        f"[RATE LIMIT] User {chat_id} "
+        f"must wait {remaining:.1f}s"
+    )
 
-                return
+    return
 
         # Start cooldown only after passing the checks
         user_file_cooldowns[chat_id] = now
