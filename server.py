@@ -686,7 +686,7 @@ async def start_command(event):
 
         "📤 Send your file to get started.\n\n"
 
-        '❤️ Made with '
+        'Made with ❤️ by'
         '<a href="https://www.instagram.com/2aswadhh_._kr">'
         'aswadh_kr'
         '</a>',
