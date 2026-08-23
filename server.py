@@ -1402,7 +1402,6 @@ async def direct_proxy(
         "Content-Disposition": content_disposition,
         "Cache-Control": "no-cache"
     }
-
     return StreamingResponse(
         stream_generator(),
         status_code=(
@@ -1412,8 +1411,8 @@ async def direct_proxy(
         ),
         media_type=mime,
         headers=headers
-)
-
+    )
+    
 # ============================================================
 # 12-HOUR AUTO CLEANUP
 # ============================================================
