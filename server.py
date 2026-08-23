@@ -365,7 +365,7 @@ async def stats_command(event):
             f"<code>{html.escape(str(LAST_ERROR))}</code>\n\n"
 
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            '❤️ Made with '
+            'Made with ♥ by'
             '<a href="https://www.instagram.com/2aswadhh_._kr">'
             'aswadh_kr'
             '</a>'
