@@ -526,7 +526,17 @@ async def telegram_stream(
         )
 
 
+@bot.on(events.NewMessage)
 async def receive_file(event):
+
+    print(
+        "[DEBUG] MESSAGE RECEIVED:",
+        event.id,
+        "FILE:",
+        bool(event.file),
+        "CHAT:",
+        event.chat_id
+    )
 
     if not event.file:
         return
