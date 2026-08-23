@@ -41,6 +41,16 @@ HOST = "0.0.0.0"
 PORT = 8000
 CHUNK_SIZE = 512 * 1024
 
+# ============================================================
+# FILE LIMITS / RATE LIMIT
+# ============================================================
+
+MAX_FILE_SIZE = 6 * 1024 * 1024 * 1024   # 6 GB
+
+FILE_COOLDOWN = 10                        # 10 seconds
+
+user_file_cooldowns = {}
+
 BOT_USERNAME = ""
 
 if API_ID <= 0:
