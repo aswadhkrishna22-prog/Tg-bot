@@ -1282,7 +1282,38 @@ function setStatus(text) {{
 }}
 
 function stream() {{
-    location.href = STREAM_URL;
+
+    const poster = document.querySelector(".poster");
+    if (!poster) return;
+
+    poster.innerHTML = `
+        <video
+            id="mainVideo"
+            controls
+            autoplay
+            playsinline
+            preload="metadata"
+            style="
+                width:100%;
+                height:100%;
+                display:block;
+                object-fit:contain;
+                background:#000;
+                border-radius:18px;
+            "
+        >
+            <source src="${STREAM_URL}" type="video/mp4">
+            Your browser does not support video playback.
+        </video>
+    `;
+
+    const video = document.getElementById("mainVideo");
+
+    video.play().catch(() => {{
+        video.controls = true;
+    }});
+
+    setStatus("STADY-PROXY • PLAYING ▶");
 }}
 
 function togglePlayers() {{
