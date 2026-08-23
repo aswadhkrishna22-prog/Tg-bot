@@ -1225,12 +1225,49 @@ STADY-PROXY • READY
         target="_blank"
         rel="noopener noreferrer"
         style="
-            color:inherit;
+            display:inline-flex;
+            align-items:center;
+            gap:6px;
+            margin-left:4px;
+            color:#ff2bd6;
             text-decoration:none;
-            font-weight:600;
+            font-weight:700;
+            text-shadow:
+                0 0 5px rgba(255,43,214,.8),
+                0 0 12px rgba(255,43,214,.55);
         "
     >
-        📷 aswadh_kr
+        <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+        >
+            <rect
+                x="3"
+                y="3"
+                width="18"
+                height="18"
+                rx="5"
+                stroke="currentColor"
+                stroke-width="2"
+            />
+            <circle
+                cx="12"
+                cy="12"
+                r="4"
+                stroke="currentColor"
+                stroke-width="2"
+            />
+            <circle
+                cx="17.5"
+                cy="6.5"
+                r="1"
+                fill="currentColor"
+            />
+        </svg>
+        aswadh_kr
     </a>
 </div>
 
