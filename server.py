@@ -1131,7 +1131,14 @@ alt="Video thumbnail"
 >
 ⏵ Stream ⏵
 </button>
-
+<a
+    class="btn"
+    href="{stream_url}&action=download"
+    download
+    style="text-decoration:none;text-align:center;display:block;"
+>
+⬇ Download
+</a>
 <div
     class="players"
     id="players"
