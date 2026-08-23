@@ -516,11 +516,118 @@ async def telegram_stream(
         )
 
 
+remaining = FILE_COOLDOWN - elapsed
+
+                await event.reply(
+                    "⏳ <b>Please wait.</b>\n\n"
+                    f"You can send another file in "
+                    f"<code>{remaining:.1f} seconds</code>.",
+                    parse_mode="html"
+                )
+
+                print(
+                    f"[RATE LIMIT] User {chat_id} "
+                    f"must wait {remaining:.1f}s"
+                )
+
+                return
+
+        # Start cooldown only after passing the checks
+        user_file_cooldowns[chat_id] = now
+
+        # ====================================================
+        # FILENAME
+        # ====================================================
+
+        filename = event.file.name
+
+        if not filename:
+
+            mime = (
+                event.file.mime_type
+                or "application/octet-stream"
+            )
+
+            if mime.startswith("video/"):
+                filename = "video.mp4"
+
+            elif mime.startswith("audio/"):
+                filename = "audio.mp3"
+
+            else:
+                filename = "telegram_file"
+
+        filename = clean_filename(filename)
+
+        # ====================================================
+        # MIME
+        # ====================================================
+
+        mime = (
+            event.file.mime_type
+            or get_mime(filename)
+        )
+
+        # ====================================================
+        # TOKEN
+        # ====================================================
+
+        token = uuid.uuid4().hex
+
+        message_id = int(event.id)
+
+        # ====================================================
+        # REGISTER FILE
+        # ====================================================
+
+        add_file(
+            token,
+            chat_id,
+            message_id,
+            filename,
+            size,
+            mime
+        )
+
+        stream_url = (
+            f"{PUBLIC_URL}/watch/{token}"
+        )
+
+        size_gb = (
+            size / 1024 / 1024 / 1024
+        )
+
+        print(
+            "\n" + "=" * 60
+        )
+
+        print(
+            "[+] Telegram file registered"
+        )
+
+        print(
+            "[+] Filename:",
+            filename
+        )
+
+        print(
+            f"[+] Size: {size_gb:.2f} GB"
+        )
+
+        print(
+            "[+] Token:",
+            token
+        )
+
+        print(
+            "=" * 60
+        )
+
+        # ====================================================
 # ============================================================
 # TELEGRAM BOT HANDLERS
 # ============================================================
 
-@bot.on(events.NewMessage)
 # ============================================================
 # FILE UPLOAD LIMIT / RATE LIMIT
 # ============================================================
@@ -530,7 +637,9 @@ FILE_COOLDOWN = 10  # seconds
 
 user_file_cooldowns = {}
 
-            async def receive_file(event):
+
+@bot.on(events.NewMessage)
+async def receive_file(event):
 
     if not event.file:
         return
@@ -595,7 +704,7 @@ user_file_cooldowns = {}
 
                 return
 
-        # Start cooldown only after passing the checks
+        # Start cooldown only after passing checks
         user_file_cooldowns[chat_id] = now
 
         # ====================================================
