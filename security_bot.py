@@ -423,7 +423,7 @@ async def start_command(event):
         pattern=r"^/users$"
     )
 )
-async async def users_command(event):
+async def users_command(event):
 
     print(
         "[DEBUG /users] sender_id:",
