@@ -1532,9 +1532,9 @@ async def direct_proxy(
 
     if not row:
 
-        raise HTTPException(
-            status_code=404,
-            detail="File not found"
+        return HTMLResponse(
+        content=stady_error_page(),
+        status_code=404
         )
 
     real_filename = row["filename"]
