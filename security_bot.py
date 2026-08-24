@@ -243,8 +243,7 @@ def get_blocked_users():
 # ============================================================
 
 def get_proxy_users():
-
-    try:
+try:
 
         with files_pg_db() as db:
 
@@ -252,11 +251,20 @@ def get_proxy_users():
 
                 cursor.execute("""
                     SELECT
-                        chat_id,
-                        COUNT(*) AS file_count
-                    FROM files
-                    GROUP BY chat_id
-                    ORDER BY file_count DESC
+                        u.user_id,
+                        u.first_name,
+                        u.last_name,
+                        u.first_seen,
+                        COUNT(f.token) AS file_count
+                    FROM users u
+                    LEFT JOIN files f
+                        ON f.chat_id = u.user_id
+                    GROUP BY
+                        u.user_id,
+                        u.first_name,
+                        u.last_name,
+                        u.first_seen
+                    ORDER BY u.first_seen DESC
                 """)
 
                 return cursor.fetchall()
