@@ -1151,9 +1151,9 @@ async def watch(token):
     row = get_file(token)
 
     if not row:
-        raise HTTPException(
-            status_code=404,
-            detail="File not found"
+        return HTMLResponse(
+        content=stady_error_page(),
+        status_code=404
         )
 
     filename = row["filename"]
