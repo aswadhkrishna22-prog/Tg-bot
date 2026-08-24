@@ -1,0 +1,25 @@
+name: Build Security Bot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "security_bot.py"
+      - "securityrequirements.txt"
+      - "Dockerfile.security"
+      - ".github/workflows/security-bot.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Security Bot image
+        run: |
+          docker build \
+            -f Dockerfile.security \
+            -t security-bot:latest .
