@@ -11,6 +11,8 @@ from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
+from urllib.request import Request as URLRequest, urlopen
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -31,6 +33,12 @@ except ValueError:
 
 API_HASH = os.getenv("TG_API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+SECURITY_BOT_TOKEN = os.getenv("SECURITY_BOT_TOKEN", "").strip()
+
+try:
+    SECURITY_OWNER_ID = int(os.getenv("SECURITY_OWNER_ID", "0"))
+except ValueError:
+    raise RuntimeError("SECURITY_OWNER_ID must be a number")
 
 PUBLIC_URL = os.getenv(
     "PUBLIC_URL",
@@ -105,6 +113,16 @@ def init_database():
                     size BIGINT NOT NULL,
                     mime TEXT NOT NULL,
                     expires_at TIMESTAMPTZ
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    first_name TEXT NOT NULL DEFAULT '',
+                    last_name TEXT NOT NULL DEFAULT '',
+                    username TEXT NOT NULL DEFAULT '',
+                    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
 
@@ -790,8 +808,73 @@ async def receive_file(event):
         except Exception:
             pass
 
+async def notify_new_user(user):
+    if not SECURITY_BOT_TOKEN or SECURITY_OWNER_ID <= 0:
+        return
+
+    first_name = user.first_name or ""
+    last_name = user.last_name or ""
+    username = user.username or "None"
+    user_id = int(user.id)
+
+    text = (
+        "🆕 <b>NEW USER</b>\n\n"
+        f"👤 <b>Name:</b> {html.escape(first_name + (' ' + last_name if last_name else ''))}\n"
+        f"🔗 <b>Username:</b> @{html.escape(username) if username != 'None' else 'None'}\n"
+        f"🆔 <b>ID:</b> <code>{user_id}</code>"
+    )
+
+    try:
+        data = urlencode({
+            "chat_id": SECURITY_OWNER_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }).encode()
+
+        request = URLRequest(
+            f"https://api.telegram.org/bot{SECURITY_BOT_TOKEN}/sendMessage",
+            data=data,
+            method="POST"
+        )
+
+        await asyncio.to_thread(urlopen, request, timeout=10)
+
+    except Exception as error:
+        print(f"Security notification failed: {error}")
+
+
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_command(event):
+
+    user = await event.get_sender()
+    is_new_user = False
+
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO users
+                    (user_id, first_name, last_name, username)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING user_id
+                    """,
+                    (
+                        int(user.id),
+                        user.first_name or "",
+                        user.last_name or "",
+                        user.username or ""
+                    )
+                )
+
+                is_new_user = cursor.fetchone() is not None
+
+    except Exception as error:
+        print(f"User tracking failed: {error}")
+
+    if is_new_user:
+        await notify_new_user(user)
 
     await event.reply(
 
