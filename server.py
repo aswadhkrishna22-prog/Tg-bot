@@ -1541,9 +1541,10 @@ async def direct_proxy(
 
     if filename != real_filename:
 
-        raise HTTPException(
-            status_code=404,
-            detail="Filename mismatch"
+        return HTMLResponse(
+        content=stady_error_page(),
+        status_code=404
+
         )
 
     try:
