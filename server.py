@@ -1567,9 +1567,9 @@ async def direct_proxy(
 
     if not message or not message.media:
 
-        raise HTTPException(
-            status_code=404,
-            detail="Telegram file no longer exists"
+        return HTMLResponse(
+        content=stady_error_page(),
+        status_code=404
         )
 
     file_size = int(row["size"])
