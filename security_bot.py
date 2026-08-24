@@ -243,7 +243,7 @@ def get_blocked_users():
 # ============================================================
 
 def get_proxy_users():
-try:
+    try:
 
         with files_pg_db() as db:
 
