@@ -462,11 +462,26 @@ async def users_command(event):
 
     for row in users[:100]:
 
-        user_id = int(row["chat_id"])
+        user_id = int(row["user_id"])
 
-        count = int(
-            row["file_count"]
+        first_name = row["first_name"] or ""
+        last_name = row["last_name"] or ""
+
+        name = (
+            f"{first_name} {last_name}".strip()
+            or "Unknown"
         )
+
+        first_seen = row["first_seen"]
+
+        if first_seen:
+            started = first_seen.strftime(
+                "%d %b %Y, %I:%M %p"
+            )
+        else:
+            started = "Unknown"
+
+        count = int(row["file_count"])
 
         status = (
             "🚫 BLOCKED"
@@ -474,11 +489,14 @@ async def users_command(event):
             else "✅ ACTIVE"
         )
 
-        lines.append(
-            f"• <code>{user_id}</code> "
-            f"— {count} file(s) "
-            f"— {status}"
-        )
+        lines.extend([
+            f"👤 <b>{html.escape(name)}</b>",
+            f"🆔 <code>{user_id}</code>",
+            f"📅 Started: <code>{started}</code>",
+            f"📁 Files: <code>{count}</code>",
+            status,
+            ""
+        ])
 
     await event.reply(
         "\n".join(lines),
