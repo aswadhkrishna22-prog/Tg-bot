@@ -215,6 +215,47 @@ bot = TelegramClient(
 
 BOT_START_TIME = time.time()
 LAST_ERROR = "None"
+# ============================================================
+# CUSTOM STADY-PROXY ERROR PAGE
+# ============================================================
+
+ERROR_PAGE = BASE_DIR / "stady_proxy_404.html"
+
+
+def stady_error_page():
+    try:
+        return ERROR_PAGE.read_text(
+            encoding="utf-8"
+        )
+
+    except Exception as error:
+        print(
+            "[!] Could not load custom 404 page:",
+            error
+        )
+
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>STADY-PROXY — 404 ERROR</title>
+        </head>
+        <body style="
+            background:#020812;
+            color:#69f7ff;
+            text-align:center;
+            font-family:Arial;
+            padding-top:100px;
+        ">
+            <h1>STADY-PROXY</h1>
+            <h2>404 — FILE NOT AVAILABLE</h2>
+            <a href="/" style="color:#ff24d7;">
+                Return Home
+            </a>
+        </body>
+        </html>
+        """
 def get_file(token):
 
     with db_connect() as db:
