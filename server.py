@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from telethon import TelegramClient, events, Button
 import uvicorn
 
@@ -220,6 +220,16 @@ LAST_ERROR = "None"
 # ============================================================
 
 ERROR_PAGE = BASE_DIR / "stady_proxy_404.html"
+ERROR_IMAGE = BASE_DIR / "stady-proxy-404.png"
+
+
+@app.get("/stady-proxy-404.png")
+async def stady_proxy_404_image():
+    return FileResponse(
+        ERROR_IMAGE,
+        media_type="image/png"
+    )
+
 
 
 def stady_error_page():
