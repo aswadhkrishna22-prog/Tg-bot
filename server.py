@@ -843,8 +843,29 @@ async def notify_new_user(user):
         print(f"Security notification failed: {error}")
 
 
-@bot.on(events.NewMessage(pattern=r"^/start$"))
+@bot.on(events.NewMessage(pattern=r"^/start(?:\s+(.+))?$"))
 async def start_command(event):
+
+    # Deep-link from the STADY-PROXY 404 page.
+    # Telegram sends: /start unavailable
+    start_match = event.pattern_match
+    start_param = (
+        start_match.group(1).strip().lower()
+        if start_match and start_match.group(1)
+        else ""
+    )
+
+    if start_param == "unavailable":
+        await event.reply(
+            "⚠️ <b>Sorry! This file is currently unavailable.</b>\n\n"
+            "🔒 The file may have been removed, expired, "
+            "or access may have been restricted by the administrator.\n\n"
+            "🛠️ <b>Found a problem?</b>\n"
+            "Please contact the administrator:\n"
+            "👉 <a href=\"https://t.me/aswadhcr7\">@aswadhcr7</a>",
+            parse_mode="html"
+        )
+        return
 
     user = await event.get_sender()
     is_new_user = False
@@ -1908,4 +1929,4 @@ if __name__ == "__main__":
 
         print(
             "\n[+] Server stopped."
-            )
+)
