@@ -35,6 +35,13 @@ API_HASH = os.getenv("TG_API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 SECURITY_BOT_TOKEN = os.getenv("SECURITY_BOT_TOKEN", "").strip()
 
+# Deployment mode:
+# true  = Telegram bot + website (use this on RamnayCloud)
+# false = website/streaming only (use this on Render)
+BOT_MODE = os.getenv("BOT_MODE", "true").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+
 try:
     SECURITY_OWNER_ID = int(os.getenv("SECURITY_OWNER_ID", "0"))
 except ValueError:
@@ -333,6 +340,9 @@ def usage_bar(percent, total=10):
 @bot.on(events.NewMessage(pattern=r"^/stats$"))
 async def stats_command(event):
 
+    if not BOT_MODE:
+        return
+
     try:
         cpu = psutil.cpu_percent(interval=0.5)
 
@@ -598,6 +608,9 @@ async def telegram_stream(
 @bot.on(events.NewMessage)
 async def receive_file(event):
 
+    if not BOT_MODE:
+        return
+
     print(
         "[DEBUG] MESSAGE RECEIVED:",
         event.id,
@@ -845,6 +858,9 @@ async def notify_new_user(user):
 
 @bot.on(events.NewMessage(pattern=r"^/start(?:\s+(.+))?$"))
 async def start_command(event):
+
+    if not BOT_MODE:
+        return
 
     # Deep-link from the STADY-PROXY 404 page.
     # Telegram sends: /start unavailable
@@ -1869,6 +1885,10 @@ async def main():
 
     print(
         f"[+] Bot: @{BOT_USERNAME}"
+    )
+
+    print(
+        f"[+] BOT MODE: {"ENABLED" if BOT_MODE else "DISABLED (WEB/STREAM ONLY)"}"
     )
 
     print(
