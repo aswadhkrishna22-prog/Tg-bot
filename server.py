@@ -36,9 +36,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 SECURITY_BOT_TOKEN = os.getenv("SECURITY_BOT_TOKEN", "").strip()
 
 # Deployment mode:
-# true  = Telegram bot + website (use this on RamnayCloud)
-# false = website/streaming only (use this on Render)
-BOT_MODE = os.getenv("BOT_MODE", "true").strip().lower() in (
+# true  = RamnayCloud: Telegram bot + web/streaming
+# false = Render: web/streaming only, Telegram updates disabled
+BOT_MODE = os.getenv("BOT_MODE", "false").strip().lower() in (
     "1", "true", "yes", "on"
 )
 
@@ -75,7 +75,9 @@ if not API_HASH:
     raise RuntimeError("TG_API_HASH is missing")
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing")
+    raise RuntimeError(
+        "BOT_TOKEN is missing (required for Telegram streaming/authentication)"
+    )
 
 # ============================================================
 # DATABASE
@@ -235,7 +237,8 @@ app = FastAPI(title="STADY-PROXY")
 bot = TelegramClient(
     "proxybot",
     API_ID,
-    API_HASH
+    API_HASH,
+    receive_updates=BOT_MODE
 )
 
 BOT_START_TIME = time.time()
@@ -1888,7 +1891,14 @@ async def main():
     )
 
     print(
-        f"[+] BOT MODE: {"ENABLED" if BOT_MODE else "DISABLED (WEB/STREAM ONLY)"}"
+        "[+] BOT MODE: "
+        + ("ENABLED (RAMNAYCLOUD)" if BOT_MODE
+           else "DISABLED (RENDER WEB/STREAM ONLY)")
+    )
+
+    print(
+        "[+] Telegram updates: "
+        + ("ENABLED" if BOT_MODE else "DISABLED")
     )
 
     print(
@@ -1915,9 +1925,12 @@ async def main():
 
     server = uvicorn.Server(config)
 
-    cleanup_task = asyncio.create_task(
-        cleanup_expired_files()
-    )
+    cleanup_task = None
+
+    if BOT_MODE:
+        cleanup_task = asyncio.create_task(
+            cleanup_expired_files()
+        )
 
     try:
 
@@ -1925,12 +1938,13 @@ async def main():
 
     finally:
 
-        cleanup_task.cancel()
+        if cleanup_task is not None:
+            cleanup_task.cancel()
 
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
 
         print(
             "[+] Disconnecting Telegram..."
