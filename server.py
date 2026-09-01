@@ -1857,6 +1857,18 @@ async def receive_page(share_token: str):
 <button class="btn" onclick="openPlayer('mx')">▶ MX PLAYER</button>
 <button class="btn" onclick="playBrowser()">🌐 BROWSER PLAYER</button>
 </div>
+<p class="small">
+⚠️ Can't open directly in VLC or MX Player?<br>
+Copy the link below and paste it into your player.
+</p>
+
+<button class="btn" onclick="copyStreamLink()">
+    📋 COPY STREAM LINK
+</button>
+
+<p id="copyLink" class="small" style="word-break:break-all;margin-top:12px;">
+{stream_url}
+</p>
 
 <p class="small">If an external player does not open, use Browser Player.</p>
 </div>
