@@ -1647,7 +1647,22 @@ function togglePlayers() {{
         ? "none"
         : "block";
 }}
+                  
+function copyStreamLink() {
+    navigator.clipboard.writeText(STREAM_URL).then(() => {
+        setStatus("✅ STREAM LINK COPIED");
+    }).catch(() => {
+        const input = document.createElement("input");
+        input.value = STREAM_URL;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
 
+        setStatus("✅ STREAM LINK COPIED");
+    });
+}
+          
 function openPlayer(player) {{
 
     let intent = "";
