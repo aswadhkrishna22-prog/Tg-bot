@@ -5,6 +5,7 @@ import os
 import re
 import psycopg2
 import uuid
+import secrets
 import time
 import psutil
 import qrcode
@@ -168,6 +169,17 @@ def init_database():
                 WHERE share_token IS NOT NULL
             """)
 
+            cursor.execute("""
+                ALTER TABLE files
+                ADD COLUMN IF NOT EXISTS pair_code TEXT
+            """)
+
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_files_pair_code
+                ON files (pair_code)
+                WHERE pair_code IS NOT NULL
+            """)
+
         db.commit()
 
 
@@ -273,6 +285,44 @@ def get_file_by_share_token(share_token):
                     OR expires_at > NOW()
                 )
             """, (share_token,))
+            return cursor.fetchone()
+
+
+def create_pair_code(token):
+    """Create a unique 6-digit code used for TV pairing."""
+    for _ in range(20):
+        pair_code = f"{secrets.randbelow(1000000):06d}"
+
+        try:
+            with db_connect() as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE files
+                        SET pair_code = %s
+                        WHERE token = %s
+                    """, (pair_code, token))
+                db.commit()
+
+            return pair_code
+
+        except psycopg2.errors.UniqueViolation:
+            continue
+
+    raise RuntimeError("Could not create a unique TV pairing code")
+
+
+def get_file_by_pair_code(pair_code):
+    with db_connect() as db:
+        with db.cursor() as cursor:
+            cursor.execute("""
+                SELECT *
+                FROM files
+                WHERE pair_code = %s
+                AND (
+                    expires_at IS NULL
+                    OR expires_at > NOW()
+                )
+            """, (pair_code,))
             return cursor.fetchone()
 
 
@@ -799,6 +849,8 @@ async def receive_file(event):
         share_token = create_share_token(token)
         share_url = f"{PUBLIC_URL}/share/{share_token}"
 
+        pair_code = create_pair_code(token)
+
         size_gb = (
             size / 1024 / 1024 / 1024
         )
@@ -853,6 +905,8 @@ async def receive_file(event):
             f"🎬 <b>{html.escape(filename)}</b>\n"
             f"📦 Size: "
             f"<code>{size_gb:.2f} GB</code>\n\n"
+            f"📺 <b>TV PAIRING CODE:</b> <code>{pair_code}</code>\n\n"
+            "On your TV, open STADY-PROXY and enter this 6-digit code.\n\n"
             "Click the button below to stream:",
             buttons=buttons,
             parse_mode="html"
@@ -1321,7 +1375,51 @@ async def home():
             SERVER ONLINE 🚀
         </div>
 
+        <div class="actions">
+            <input
+                id="pairCode"
+                class="btn"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                maxlength="6"
+                placeholder="ENTER 6-DIGIT TV CODE"
+                style="text-align:center;"
+            >
+            <button
+                class="btn"
+                onclick="pairDevice()"
+            >
+                📺 PAIR TV
+            </button>
+        </div>
+
+        <p style="text-align:center;line-height:1.7;color:#a9bfd0;font-size:14px;">
+            <b>📖 TV PAIRING — HOW TO USE</b><br><br>
+            1️⃣ Send a video/file to the STADY-PROXY Telegram bot.<br>
+            2️⃣ Open the generated SHARE page on your phone.<br>
+            3️⃣ Find the 6-digit TV pairing code shown there (it is also sent in Telegram).<br>
+            4️⃣ On your TV, open this STADY-PROXY home page.<br>
+            5️⃣ Enter the 6-digit code above and tap <b>PAIR TV</b>.<br>
+            6️⃣ Your TV will open the receiver page with VLC, MX Player and Browser Player options.<br><br>
+            ⏳ Pairing codes follow the same 12-hour file expiry.
+        </p>
+
     </section>
+
+<script>
+function pairDevice() {{
+    const input = document.getElementById("pairCode");
+    const code = input.value.trim();
+
+    if (!/^[0-9]{{6}}$/.test(code)) {{
+        input.focus();
+        return;
+    }}
+
+    location.href = "/pair/" + code;
+}}
+</script>
 
 </main>
 
@@ -1724,6 +1822,7 @@ async def share_page(share_token: str):
 
     filename = row["filename"]
     safe_name = html.escape(filename)
+    pair_code = row["pair_code"] or "------"
     receiver_url = f"{PUBLIC_URL}/receive/{share_token}"
 
     return HTMLResponse(
@@ -1748,6 +1847,24 @@ async def share_page(share_token: str):
 <p class="small">Scan this QR code on the other device.</p>
 <img class="qr" src="/share-qr/{share_token}.png" alt="Share QR code">
 <p><b>{safe_name}</b></p>
+<p style="font-size:18px;margin:18px 0 8px;">
+    📺 <b>TV PAIRING CODE</b>
+</p>
+<p style="
+    font-family:monospace;
+    font-size:34px;
+    font-weight:800;
+    letter-spacing:8px;
+    margin:0 0 14px;
+    color:#69f7ff;
+    text-shadow:0 0 12px #00eaff;
+">
+    {pair_code}
+</p>
+<p class="small">
+    Enter this 6-digit code on the STADY-PROXY home page on your TV.<br>
+    The QR code above can still be scanned directly.
+</p>
 <p class="small">The QR opens a receiver page with player options.</p>
 </div>
 </section>
@@ -1914,6 +2031,56 @@ function openPlayer(player) {{
     }}
 }}
 </script>
+</body>
+</html>"""
+    )
+
+
+# ============================================================
+# TV PAIRING
+# ============================================================
+
+@app.get("/pair/{code}", response_class=HTMLResponse)
+async def pair_device(code: str):
+    code = code.strip()
+
+    if not re.fullmatch(r"\d{6}", code):
+        return HTMLResponse(
+            content=stady_error_page(),
+            status_code=404
+        )
+
+    row = get_file_by_pair_code(code)
+
+    if not row:
+        return HTMLResponse(
+            content=stady_error_page(),
+            status_code=404
+        )
+
+    share_token = row["share_token"]
+
+    if not share_token:
+        share_token = create_share_token(row["token"])
+
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="refresh" content="0; url=/receive/{share_token}">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>STADY-PROXY | TV Pairing</title>
+</head>
+<body style="
+    background:#030914;
+    color:#eaf7ff;
+    font-family:Arial,sans-serif;
+    text-align:center;
+    padding-top:80px;
+">
+<h2>📺 TV PAIRED</h2>
+<p>Opening the receiver page...</p>
+<p><a href="/receive/{share_token}" style="color:#69f7ff;">Continue</a></p>
 </body>
 </html>"""
     )
