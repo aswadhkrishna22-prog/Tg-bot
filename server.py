@@ -1647,22 +1647,7 @@ function togglePlayers() {{
         ? "none"
         : "block";
 }}
-                  
-function copyStreamLink() {
-    navigator.clipboard.writeText(STREAM_URL).then(() => {
-        setStatus("✅ STREAM LINK COPIED");
-    }).catch(() => {
-        const input = document.createElement("input");
-        input.value = STREAM_URL;
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand("copy");
-        input.remove();
 
-        setStatus("✅ STREAM LINK COPIED");
-    });
-}
-          
 function openPlayer(player) {{
 
     let intent = "";
@@ -1857,6 +1842,7 @@ async def receive_page(share_token: str):
 <button class="btn" onclick="openPlayer('mx')">▶ MX PLAYER</button>
 <button class="btn" onclick="playBrowser()">🌐 BROWSER PLAYER</button>
 </div>
+
 <p class="small">
 ⚠️ Can't open directly in VLC or MX Player?<br>
 Copy the link below and paste it into your player.
@@ -1885,6 +1871,20 @@ function setStatus(text) {{
 
 function playBrowser() {{
     location.href = STREAM_URL;
+}}
+
+function copyStreamLink() {{
+    navigator.clipboard.writeText(STREAM_URL).then(() => {{
+        setStatus("✅ STREAM LINK COPIED");
+    }}).catch(() => {{
+        const input = document.createElement("input");
+        input.value = STREAM_URL;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+        setStatus("✅ STREAM LINK COPIED");
+    }});
 }}
 
 function openPlayer(player) {{
@@ -2234,4 +2234,3 @@ if __name__ == "__main__":
         print(
             "\n[+] Server stopped."
 )
-
