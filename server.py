@@ -7,6 +7,7 @@ import psycopg2
 import uuid
 import time
 import psutil
+import qrcode
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from pathlib import Path
@@ -156,6 +157,17 @@ def init_database():
                 ADD COLUMN IF NOT EXISTS bot_message_id BIGINT
             """)
 
+            cursor.execute("""
+                ALTER TABLE files
+                ADD COLUMN IF NOT EXISTS share_token TEXT
+            """)
+
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_files_share_token
+                ON files (share_token)
+                WHERE share_token IS NOT NULL
+            """)
+
         db.commit()
 
 
@@ -225,6 +237,43 @@ def save_bot_message_id(
 
         db.commit()
 
+
+
+
+
+def create_share_token(token):
+    """Create a short token used only for device sharing."""
+    for _ in range(10):
+        share_token = uuid.uuid4().hex[:10]
+        try:
+            with db_connect() as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE files
+                        SET share_token = %s
+                        WHERE token = %s
+                    """, (share_token, token))
+                db.commit()
+            return share_token
+        except psycopg2.errors.UniqueViolation:
+            continue
+
+    raise RuntimeError("Could not create a unique share token")
+
+
+def get_file_by_share_token(share_token):
+    with db_connect() as db:
+        with db.cursor() as cursor:
+            cursor.execute("""
+                SELECT *
+                FROM files
+                WHERE share_token = %s
+                AND (
+                    expires_at IS NULL
+                    OR expires_at > NOW()
+                )
+            """, (share_token,))
+            return cursor.fetchone()
 
 
 
@@ -747,6 +796,9 @@ async def receive_file(event):
             f"{PUBLIC_URL}/watch/{token}"
         )
 
+        share_token = create_share_token(token)
+        share_url = f"{PUBLIC_URL}/share/{share_token}"
+
         size_gb = (
             size / 1024 / 1024 / 1024
         )
@@ -786,6 +838,12 @@ async def receive_file(event):
                 Button.url(
                     "▶️ WATCH / STREAM",
                     stream_url
+                )
+            ],
+            [
+                Button.url(
+                    "📺 SHARE WITH ANOTHER DEVICE",
+                    share_url
                 )
             ]
         ]
@@ -1649,6 +1707,191 @@ function openPlayer(player) {{
 </html>"""
 
 
+
+# ============================================================
+# DEVICE SHARING
+# ============================================================
+
+@app.get("/share/{share_token}", response_class=HTMLResponse)
+async def share_page(share_token: str):
+    row = get_file_by_share_token(share_token)
+
+    if not row:
+        return HTMLResponse(
+            content=stady_error_page(),
+            status_code=404
+        )
+
+    filename = row["filename"]
+    safe_name = html.escape(filename)
+    receiver_url = f"{PUBLIC_URL}/receive/{share_token}"
+
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>STADY-PROXY | Share</title>
+<style>{STADY_CSS}
+.sharebox{{text-align:center;padding:18px 8px 10px}}
+.qr{{width:min(310px,80vw);height:auto;background:#fff;padding:12px;border-radius:12px;margin:14px auto;display:block}}
+.small{{color:#a9bfd0;font-size:14px;line-height:1.6}}
+</style>
+</head>
+<body>
+<main class="page">
+<div class="brand">STADY-PROXY</div>
+<section class="frame">
+<div class="sharebox">
+<h2>📺 SHARE WITH ANOTHER DEVICE</h2>
+<p class="small">Scan this QR code on the other device.</p>
+<img class="qr" src="/share-qr/{share_token}.png" alt="Share QR code">
+<p><b>{safe_name}</b></p>
+<p class="small">The QR opens a receiver page with player options.</p>
+</div>
+</section>
+<div class="status">STADY-PROXY • READY</div>
+</main>
+</body>
+</html>"""
+    )
+
+
+@app.get("/share-qr/{share_token}.png")
+async def share_qr(share_token: str):
+    from io import BytesIO
+
+    row = get_file_by_share_token(share_token)
+
+    if not row:
+        return HTMLResponse(
+            content=stady_error_page(),
+            status_code=404
+        )
+
+    receiver_url = f"{PUBLIC_URL}/receive/{share_token}"
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=4,
+    )
+    qr.add_data(receiver_url)
+    qr.make(fit=True)
+
+    image = qr.make_image(fill_color="black", back_color="white")
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"}
+    )
+
+
+@app.get("/receive/{share_token}", response_class=HTMLResponse)
+async def receive_page(share_token: str):
+    row = get_file_by_share_token(share_token)
+
+    if not row:
+        return HTMLResponse(
+            content=stady_error_page(),
+            status_code=404
+        )
+
+    filename = row["filename"]
+    safe_name = html.escape(filename)
+    encoded_filename = quote(filename, safe="")
+    stream_url = (
+        f"{PUBLIC_URL}/{row['token']}/"
+        f"{encoded_filename}?action=stream"
+    )
+
+    stream_no_scheme = (
+        stream_url.replace("https://", "").replace("http://", "")
+    )
+    scheme = "https" if stream_url.startswith("https://") else "http"
+
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>STADY-PROXY | Receiver</title>
+<style>{STADY_CSS}
+.receiver{{text-align:center;padding:18px 8px}}
+.file{{font-size:18px;word-break:break-word}}
+</style>
+</head>
+<body>
+<main class="page">
+<div class="brand">STADY-PROXY</div>
+<section class="frame">
+<div class="receiver">
+<h2>📺 READY TO STREAM</h2>
+<p class="file"><b>{safe_name}</b></p>
+
+<div class="actions">
+<button class="btn" onclick="openPlayer('vlc')">▶ VLC</button>
+<button class="btn" onclick="openPlayer('mx')">▶ MX PLAYER</button>
+<button class="btn" onclick="playBrowser()">🌐 BROWSER PLAYER</button>
+</div>
+
+<p class="small">If an external player does not open, use Browser Player.</p>
+</div>
+</section>
+<div class="status" id="status">STADY-PROXY • RECEIVER READY</div>
+</main>
+
+<script>
+const STREAM_URL = {stream_url!r};
+
+function setStatus(text) {{
+    document.getElementById("status").textContent = text;
+}}
+
+function playBrowser() {{
+    location.href = STREAM_URL;
+}}
+
+function openPlayer(player) {{
+    let intent = "";
+
+    if (player === "vlc") {{
+        intent =
+            "intent://" +
+            "{stream_no_scheme}" +
+            "#Intent;scheme={scheme};" +
+            "package=org.videolan.vlc;" +
+            "type=video/*;end;";
+    }} else if (player === "mx") {{
+        intent =
+            "intent://" +
+            "{stream_no_scheme}" +
+            "#Intent;scheme={scheme};" +
+            "package=com.mxtech.videoplayer.ad;" +
+            "type=video/*;end;";
+    }}
+
+    if (intent) {{
+        setStatus("STADY-PROXY • OPENING PLAYER");
+        location.href = intent;
+    }} else {{
+        playBrowser();
+    }}
+}}
+</script>
+</body>
+</html>"""
+    )
+
+
 # ============================================================
 # DIRECT TELEGRAM PROXY
 # ============================================================
@@ -1964,3 +2207,4 @@ if __name__ == "__main__":
         print(
             "\n[+] Server stopped."
 )
+
