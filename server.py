@@ -179,7 +179,7 @@ MAX_FILE_SIZE = 6 * 1024 * 1024 * 1024   # 6 GB
 FILE_COOLDOWN = 10                        # 10 seconds
 
 # Runtime safety / observability
-STREAM_IDLE_TIMEOUT = float(os.getenv("STREAM_IDLE_TIMEOUT", "30"))
+STREAM_IDLE_TIMEOUT = float(os.getenv("STREAM_IDLE_TIMEOUT", "0"))  # 0 = disabled; browser streaming must not timeout mid-read
 REQUEST_RATE_LIMIT = int(os.getenv("REQUEST_RATE_LIMIT", "300"))
 REQUEST_RATE_WINDOW = int(os.getenv("REQUEST_RATE_WINDOW", "60"))
 MAX_RATE_LIMIT_KEYS = int(os.getenv("MAX_RATE_LIMIT_KEYS", "10000"))
@@ -886,7 +886,7 @@ async def telegram_stream(
     )
     base_delay = max(
         0.25,
-        float(os.getenv("TELEGRAM_STREAM_RETRY_DELAY", "1"))
+        float(os.getenv("TELEGRAM_STREAM_RETRY_DELAY", "0.5"))
     )
     max_delay = max(
         base_delay,
@@ -910,7 +910,13 @@ async def telegram_stream(
                 ).__aiter__()
                 while True:
                     try:
-                        chunk = await asyncio.wait_for(iterator.__anext__(), timeout=STREAM_IDLE_TIMEOUT)
+                        if STREAM_IDLE_TIMEOUT > 0:
+                            chunk = await asyncio.wait_for(
+                                iterator.__anext__(),
+                                timeout=STREAM_IDLE_TIMEOUT
+                            )
+                        else:
+                            chunk = await iterator.__anext__()
                     except StopAsyncIteration:
                         break
                     if not chunk:
@@ -2370,7 +2376,7 @@ function stream() {{
             controls
             autoplay
             playsinline
-            preload="metadata"
+            preload="auto"
             style="
                 width:100%;
                 height:100%;
@@ -2380,7 +2386,7 @@ function stream() {{
                 border-radius:18px;
             "
         >
-            <source src="${{STREAM_URL}}" type="video/mp4">
+            <source src="${{STREAM_URL}}">
             Your browser does not support video playback.
         </video>
     `;
@@ -2804,7 +2810,7 @@ async def direct_proxy(
 
     file_size = int(row["size"])
 
-    mime = row["mime"]
+    mime = row["mime"] or get_mime(real_filename) or "application/octet-stream"
 
     range_header = request.headers.get(
         "range"
@@ -2869,8 +2875,11 @@ async def direct_proxy(
                 )
 
             try:
-                async for chunk in cached_telegram_stream(
-                    token=token, message=message, file_size=file_size, offset=start, length=length
+                # IMPORTANT: stream directly from Telegram instead of waiting for a
+                # complete 4 MB cache chunk. This lets browsers receive the first
+                # bytes immediately and seek progressively with HTTP Range.
+                async for chunk in telegram_stream(
+                    message=message, offset=start, length=length
                 ):
                     yield chunk
                 metric_inc("streams_completed")
@@ -2898,10 +2907,14 @@ async def direct_proxy(
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Content-Disposition": content_disposition,
-        "Cache-Control": "no-cache"
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
     }
+
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
     return StreamingResponse(
         stream_generator(),
         status_code=(
