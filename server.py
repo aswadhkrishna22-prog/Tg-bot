@@ -8,6 +8,7 @@ import uuid
 import secrets
 import time
 import shutil
+import threading
 import psutil
 import qrcode
 from psycopg2.extras import RealDictCursor
@@ -19,8 +20,8 @@ from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from telethon import TelegramClient, events, Button
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from telethon import TelegramClient, events, Button, errors
 import uvicorn
 
 # ============================================================
@@ -78,6 +79,94 @@ CACHE_DIR.mkdir(
     exist_ok=True
 )
 
+# Keep a safety margin so cache writes never consume the last free
+# disk space. Per-token limits prevent one huge file from dominating
+# the cache. Active chunks are protected from eviction while in use.
+CACHE_PER_FILE_MAX_SIZE = int(
+    os.getenv("CACHE_PER_FILE_MAX_SIZE", str(256 * 1024 * 1024))
+)  # 256 MB per file
+
+CACHE_MIN_FREE_SPACE = int(
+    os.getenv("CACHE_MIN_FREE_SPACE", str(512 * 1024 * 1024))
+)  # keep 512 MB free
+
+CACHE_CLEANUP_INTERVAL = int(
+    os.getenv("CACHE_CLEANUP_INTERVAL", "300")
+)  # 5 minutes
+
+cache_active_files = set()
+cache_active_guard = threading.Lock()
+
+# ============================================================
+# STREAM CONCURRENCY PROTECTION
+# ============================================================
+# These limits protect the server from too many simultaneous
+# viewers without changing the existing streaming behavior.
+MAX_CONCURRENT_STREAMS = int(
+    os.getenv("MAX_CONCURRENT_STREAMS", "20")
+)
+
+MAX_CONCURRENT_PER_FILE = int(
+    os.getenv("MAX_CONCURRENT_PER_FILE", "5")
+)
+
+STREAM_ACQUIRE_TIMEOUT = int(
+    os.getenv("STREAM_ACQUIRE_TIMEOUT", "15")
+)
+
+# ============================================================
+# TELEGRAM API PROTECTION
+# ============================================================
+# Limit simultaneous Telegram media downloads and share FloodWait
+# cooldown across all viewers. This prevents a burst of cache misses
+# from creating a Telegram API request storm.
+MAX_CONCURRENT_TELEGRAM_DOWNLOADS = int(
+    os.getenv("MAX_CONCURRENT_TELEGRAM_DOWNLOADS", "3")
+)
+TELEGRAM_FLOODWAIT_CAP = int(
+    os.getenv("TELEGRAM_FLOODWAIT_CAP", "60")
+)
+
+telegram_download_semaphore = asyncio.Semaphore(
+    MAX_CONCURRENT_TELEGRAM_DOWNLOADS
+)
+telegram_cooldown_lock = asyncio.Lock()
+telegram_cooldown_until = 0.0
+
+global_stream_semaphore = asyncio.Semaphore(
+    MAX_CONCURRENT_STREAMS
+)
+
+file_stream_semaphores = {}
+file_stream_semaphores_guard = asyncio.Lock()
+
+
+async def get_file_stream_semaphore(token):
+    async with file_stream_semaphores_guard:
+        semaphore = file_stream_semaphores.get(token)
+
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(
+                MAX_CONCURRENT_PER_FILE
+            )
+            file_stream_semaphores[token] = semaphore
+
+        return semaphore
+
+
+async def remove_file_stream_semaphore(token):
+    async with file_stream_semaphores_guard:
+        semaphore = file_stream_semaphores.get(token)
+
+        if semaphore is not None:
+            if semaphore._value == MAX_CONCURRENT_PER_FILE:
+                file_stream_semaphores.pop(
+                    token,
+                    None
+                )
+
+
+
 cache_locks = {}
 cache_locks_guard = asyncio.Lock()
 
@@ -88,6 +177,44 @@ cache_locks_guard = asyncio.Lock()
 MAX_FILE_SIZE = 6 * 1024 * 1024 * 1024   # 6 GB
 
 FILE_COOLDOWN = 10                        # 10 seconds
+
+# Runtime safety / observability
+STREAM_IDLE_TIMEOUT = float(os.getenv("STREAM_IDLE_TIMEOUT", "30"))
+REQUEST_RATE_LIMIT = int(os.getenv("REQUEST_RATE_LIMIT", "300"))
+REQUEST_RATE_WINDOW = int(os.getenv("REQUEST_RATE_WINDOW", "60"))
+MAX_RATE_LIMIT_KEYS = int(os.getenv("MAX_RATE_LIMIT_KEYS", "10000"))
+DB_CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+DB_KEEPALIVES_IDLE = int(os.getenv("DB_KEEPALIVES_IDLE", "30"))
+DB_KEEPALIVES_INTERVAL = int(os.getenv("DB_KEEPALIVES_INTERVAL", "10"))
+DB_KEEPALIVES_COUNT = int(os.getenv("DB_KEEPALIVES_COUNT", "3"))
+request_rate_state = {}
+request_rate_lock = threading.Lock()
+server_metrics = {"requests": 0, "rate_limited": 0, "streams_started": 0, "streams_completed": 0, "streams_failed": 0, "stream_disconnects": 0, "telegram_retries": 0, "telegram_floodwaits": 0, "db_failures": 0}
+metrics_lock = threading.Lock()
+
+def metric_inc(name, amount=1):
+    with metrics_lock:
+        server_metrics[name] = server_metrics.get(name, 0) + amount
+
+async def request_rate_middleware(request, call_next):
+    path = request.url.path
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    if path not in ("/", "/health", "/metrics"):
+        with request_rate_lock:
+            state = request_rate_state.get(client)
+            if state is None or now - state[0] >= REQUEST_RATE_WINDOW:
+                request_rate_state[client] = [now, 1]
+            else:
+                state[1] += 1
+                if state[1] > REQUEST_RATE_LIMIT:
+                    metric_inc("rate_limited")
+                    return JSONResponse({"ok": False, "error": "Too many requests", "retry_after": REQUEST_RATE_WINDOW}, status_code=429, headers={"Retry-After": str(REQUEST_RATE_WINDOW)})
+            if len(request_rate_state) > MAX_RATE_LIMIT_KEYS:
+                for key, _ in sorted(request_rate_state.items(), key=lambda item: item[1][0])[:max(1, len(request_rate_state)//10)]:
+                    request_rate_state.pop(key, None)
+    metric_inc("requests")
+    return await call_next(request)
 
 user_file_cooldowns = {}
 
@@ -122,14 +249,21 @@ if not DATABASE_URL:
 
 
 def db_connect():
-
-    connection = psycopg2.connect(
-        DATABASE_URL,
-        sslmode="require",
-        cursor_factory=RealDictCursor
-    )
-
-    return connection
+    last_error = None
+    for attempt in range(3):
+        try:
+            return psycopg2.connect(
+                DATABASE_URL, sslmode="require", cursor_factory=RealDictCursor,
+                connect_timeout=DB_CONNECT_TIMEOUT, keepalives=1,
+                keepalives_idle=DB_KEEPALIVES_IDLE, keepalives_interval=DB_KEEPALIVES_INTERVAL,
+                keepalives_count=DB_KEEPALIVES_COUNT
+            )
+        except Exception as error:
+            last_error = error
+            metric_inc("db_failures")
+            if attempt < 2:
+                time.sleep(0.5 * (2 ** attempt))
+    raise last_error
 
 
 def init_database():
@@ -355,6 +489,23 @@ def get_file_by_pair_code(pair_code):
 # ============================================================
 
 app = FastAPI(title="STADY-PROXY")
+app.middleware("http")(request_rate_middleware)
+
+@app.get("/health")
+async def health():
+    telegram_ok = False
+    try: telegram_ok = bool(bot.is_connected())
+    except Exception: pass
+    db_ok = False
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT 1"); cursor.fetchone()
+        db_ok = True
+    except Exception: pass
+    ok = telegram_ok and db_ok
+    return JSONResponse({"ok": ok, "telegram": telegram_ok, "database": db_ok}, status_code=200 if ok else 503)
+
 
 bot = TelegramClient(
     "proxybot",
@@ -691,43 +842,130 @@ def parse_range(range_header, file_size):
 # TELEGRAM STREAM
 # ============================================================
 
+async def wait_for_telegram_cooldown():
+    """Wait for the shared FloodWait cooldown, if one is active."""
+    while True:
+        async with telegram_cooldown_lock:
+            remaining = telegram_cooldown_until - time.monotonic()
+
+        if remaining <= 0:
+            return
+
+        await asyncio.sleep(min(remaining, 2.0))
+
+
+async def set_telegram_cooldown(seconds):
+    """Extend the shared Telegram cooldown without shortening an existing one."""
+    global telegram_cooldown_until
+
+    seconds = max(0.0, min(float(seconds), float(TELEGRAM_FLOODWAIT_CAP)))
+
+    async with telegram_cooldown_lock:
+        telegram_cooldown_until = max(
+            telegram_cooldown_until,
+            time.monotonic() + seconds
+        )
+
+
 async def telegram_stream(
     message,
     offset,
     length
 ):
+    """Stream a Telegram byte range with bounded reconnect/retry support.
 
+    If Telegram fails after some bytes were delivered, the next attempt
+    resumes exactly at the undelivered byte instead of restarting the range.
+    """
     sent = 0
+    retries = 0
 
-    try:
+    max_retries = max(
+        0,
+        int(os.getenv("TELEGRAM_STREAM_MAX_RETRIES", "3"))
+    )
+    base_delay = max(
+        0.25,
+        float(os.getenv("TELEGRAM_STREAM_RETRY_DELAY", "1"))
+    )
+    max_delay = max(
+        base_delay,
+        float(os.getenv("TELEGRAM_STREAM_MAX_RETRY_DELAY", "8"))
+    )
 
-        async for chunk in bot.iter_download(
-            message.media,
-            offset=offset,
-            limit=length,
-            request_size=CHUNK_SIZE
-        ):
+    while sent < length:
+        current_offset = offset + sent
+        remaining = length - sent
 
-            if not chunk:
-                continue
+        try:
+            # All Telegram media downloads pass through the same small gate.
+            # This is deliberately separate from the viewer semaphore.
+            await wait_for_telegram_cooldown()
 
-            sent += len(chunk)
+            async with telegram_download_semaphore:
+                await wait_for_telegram_cooldown()
 
-            yield chunk
+                iterator = bot.iter_download(
+                    message.media, offset=current_offset, limit=remaining, request_size=CHUNK_SIZE
+                ).__aiter__()
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(iterator.__anext__(), timeout=STREAM_IDLE_TIMEOUT)
+                    except StopAsyncIteration:
+                        break
+                    if not chunk:
+                        continue
+                    remaining_now = length - sent
+                    if len(chunk) > remaining_now:
+                        chunk = chunk[:remaining_now]
+                    sent += len(chunk)
+                    yield chunk
+                    if sent >= length:
+                        return
 
-            if sent >= length:
-                break
+            # Telegram ended the iterator before the requested range was
+            # completely delivered. Treat that as a recoverable failure.
+            if sent < length:
+                raise IOError(
+                    f"Telegram stream ended early: {sent}/{length} bytes"
+                )
 
-    except asyncio.CancelledError:
+            return
 
-        return
+        except asyncio.CancelledError:
+            raise
 
-    except Exception as error:
+        except Exception as error:
+            if retries >= max_retries:
+                print(
+                    f"[!] Telegram stream failed after {retries} retries: {error}"
+                )
+                raise
 
-        print(
-            "[!] Telegram streaming error:",
-            error
-        )
+            retries += 1
+
+            # Telethon exposes FloodWaitError.seconds. Respect it, but cap
+            # the delay so a browser/TV connection is not held forever.
+            flood_wait = getattr(error, "seconds", None)
+            if isinstance(error, errors.FloodWaitError) and flood_wait is not None:
+                metric_inc("telegram_floodwaits")
+                delay = min(
+                    float(flood_wait),
+                    float(TELEGRAM_FLOODWAIT_CAP)
+                )
+                await set_telegram_cooldown(delay)
+            else:
+                delay = min(
+                    base_delay * (2 ** (retries - 1)),
+                    max_delay
+                )
+
+            print(
+                f"[!] Telegram stream interrupted at {sent}/{length} bytes; "
+                f"retry {retries}/{max_retries} in {delay:.1f}s: {error}"
+            )
+
+            await asyncio.sleep(delay)
 
 
 # ============================================================
@@ -754,69 +992,140 @@ async def get_cache_lock(cache_key):
         return lock
 
 
+def _cache_file_is_active(path):
+    try:
+        with cache_active_guard:
+            return str(path) in cache_active_files
+    except Exception:
+        return False
+
+
+def _mark_cache_active(path):
+    with cache_active_guard:
+        cache_active_files.add(str(path))
+
+
+def _unmark_cache_active(path):
+    with cache_active_guard:
+        cache_active_files.discard(str(path))
+
+
 def remove_cache_token(token):
     token_dir = CACHE_DIR / token
 
     if not token_dir.exists():
         return
 
+    # Never delete a token directory while one of its chunks is being
+    # read or written. The next cleanup pass will remove it safely.
     try:
-        shutil.rmtree(
-            token_dir,
-            ignore_errors=True
-        )
+        with cache_active_guard:
+            active = any(
+                item == str(token_dir)
+                or item.startswith(str(token_dir) + os.sep)
+                for item in cache_active_files
+            )
+        if active:
+            print("[CACHE] Token cache is active; delaying removal:", token)
+            return
+
+        shutil.rmtree(token_dir, ignore_errors=True)
     except Exception as error:
-        print(
-            "[CACHE] Token cache cleanup failed:",
-            error
-        )
+        print("[CACHE] Token cache cleanup failed:", error)
 
 
-def cleanup_cache_sync():
+def _cache_usage_snapshot():
     now = time.time()
     total_size = 0
     cache_files = []
 
     try:
-        for path in CACHE_DIR.rglob("*"):
-            if not path.is_file():
-                continue
-
+        for path in CACHE_DIR.rglob("*.cache"):
             try:
                 stat = path.stat()
             except OSError:
                 continue
 
             age = now - stat.st_mtime
-
-            if age > CACHE_TTL:
+            if age > CACHE_TTL and not _cache_file_is_active(path):
                 try:
                     path.unlink()
                 except OSError:
                     pass
                 continue
 
-            if path.name.endswith(".cache"):
-                total_size += stat.st_size
-                cache_files.append(
-                    (stat.st_mtime, stat.st_size, path)
-                )
+            total_size += stat.st_size
+            cache_files.append((stat.st_mtime, stat.st_size, path))
+    except OSError:
+        pass
 
-        if total_size > CACHE_MAX_SIZE:
-            cache_files.sort(
-                key=lambda item: item[0]
-            )
+    return total_size, cache_files
 
-            for _, size, path in cache_files:
-                if total_size <= CACHE_MAX_SIZE:
+
+def cleanup_cache_sync(required_bytes=0):
+    """Enforce TTL, global/per-file quotas and a minimum free-space reserve."""
+    try:
+        total_size, cache_files = _cache_usage_snapshot()
+
+        # First enforce the per-file quota. Oldest chunks from the same
+        # token are evicted first, but active chunks are never touched.
+        by_token = {}
+        for mtime, size, path in cache_files:
+            token = path.parent.name
+            by_token.setdefault(token, []).append((mtime, size, path))
+
+        for token, items in by_token.items():
+            file_total = sum(size for _, size, _ in items)
+            if file_total <= CACHE_PER_FILE_MAX_SIZE:
+                continue
+
+            items.sort(key=lambda item: item[0])
+            for _, size, path in items:
+                if file_total <= CACHE_PER_FILE_MAX_SIZE:
                     break
+                if _cache_file_is_active(path):
+                    continue
+                try:
+                    path.unlink()
+                    file_total -= size
+                    total_size -= size
+                except OSError:
+                    pass
 
+        # Determine how much must be removed to satisfy both the global
+        # cache cap and the disk free-space reserve.
+        try:
+            free_space = shutil.disk_usage(CACHE_DIR).free
+        except OSError:
+            free_space = CACHE_MIN_FREE_SPACE
+
+        target_total = min(
+            CACHE_MAX_SIZE,
+            max(0, total_size - max(0, CACHE_MIN_FREE_SPACE - free_space))
+        )
+        required_total = min(
+            total_size,
+            max(0, target_total - max(0, required_bytes))
+        )
+
+        if total_size > required_total:
+            # Refresh mtimes after the per-file pass so eviction remains
+            # true LRU-ish (recently served chunks naturally move forward).
+            _, refreshed = _cache_usage_snapshot()
+            refreshed.sort(key=lambda item: item[0])
+
+            for _, size, path in refreshed:
+                if total_size <= required_total:
+                    break
+                if _cache_file_is_active(path):
+                    continue
                 try:
                     path.unlink()
                     total_size -= size
                 except OSError:
                     pass
 
+        # Remove empty token directories.
         for directory in sorted(
             CACHE_DIR.rglob("*"),
             key=lambda item: len(item.parts),
@@ -824,34 +1133,49 @@ def cleanup_cache_sync():
         ):
             if not directory.is_dir():
                 continue
-
             try:
                 directory.rmdir()
             except OSError:
                 pass
 
     except Exception as error:
-        print(
-            "[CACHE] Cleanup error:",
-            error
-        )
+        print("[CACHE] Cleanup error:", error)
 
 
 async def cleanup_cache_loop():
     while True:
         try:
-            await asyncio.to_thread(
-                cleanup_cache_sync
-            )
+            await asyncio.to_thread(cleanup_cache_sync)
+
+            # Keep in-memory coordination maps bounded during long uptime.
+            async with cache_locks_guard:
+                if len(cache_locks) > 5000:
+                    for key, lock in list(cache_locks.items()):
+                        if not lock.locked():
+                            cache_locks.pop(key, None)
+                            if len(cache_locks) <= 3500:
+                                break
+
+            async with file_stream_semaphores_guard:
+                if len(file_stream_semaphores) > 5000:
+                    for token, semaphore in list(file_stream_semaphores.items()):
+                        if semaphore._value == MAX_CONCURRENT_PER_FILE:
+                            file_stream_semaphores.pop(token, None)
+                            if len(file_stream_semaphores) <= 3500:
+                                break
+
+            with request_rate_lock:
+                cutoff = time.monotonic() - REQUEST_RATE_WINDOW
+                for client, state in list(request_rate_state.items()):
+                    if state[0] < cutoff:
+                        request_rate_state.pop(client, None)
+
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            print(
-                "[CACHE] Background cleanup error:",
-                error
-            )
+            print("[CACHE] Background cleanup error:", error)
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(CACHE_CLEANUP_INTERVAL)
 
 
 async def download_cache_chunk(
@@ -860,23 +1184,32 @@ async def download_cache_chunk(
     chunk_start,
     chunk_length
 ):
-    part_file = cache_file.with_suffix(
-        ".cache.part"
-    )
-
+    part_file = cache_file.with_suffix(".cache.part")
     sent = 0
 
+    _mark_cache_active(cache_file)
     try:
+        # Make room before writing. A cache miss should not be allowed to
+        # fill a nearly-full disk.
+        await asyncio.to_thread(cleanup_cache_sync, chunk_length)
+
+        try:
+            free_space = shutil.disk_usage(CACHE_DIR).free
+        except OSError:
+            free_space = CACHE_MIN_FREE_SPACE
+
+        if free_space < CACHE_MIN_FREE_SPACE + chunk_length:
+            raise OSError(
+                "Not enough free disk space for temporary cache"
+            )
+
         if part_file.exists():
             try:
                 part_file.unlink()
             except OSError:
                 pass
 
-        with part_file.open(
-            "wb"
-        ) as output:
-
+        with part_file.open("wb") as output:
             async for chunk in telegram_stream(
                 message,
                 offset=chunk_start,
@@ -885,10 +1218,7 @@ async def download_cache_chunk(
                 if not chunk:
                     continue
 
-                remaining = (
-                    chunk_length - sent
-                )
-
+                remaining = chunk_length - sent
                 if remaining <= 0:
                     break
 
@@ -903,15 +1233,11 @@ async def download_cache_chunk(
 
         if sent != chunk_length:
             raise IOError(
-                f"Cache chunk incomplete: "
-                f"expected {chunk_length} bytes, "
-                f"got {sent} bytes"
+                f"Cache chunk incomplete: expected {chunk_length} bytes, got {sent} bytes"
             )
 
-        os.replace(
-            part_file,
-            cache_file
-        )
+        os.replace(part_file, cache_file)
+        os.utime(cache_file, None)
 
     except asyncio.CancelledError:
         try:
@@ -929,6 +1255,9 @@ async def download_cache_chunk(
             pass
         raise
 
+    finally:
+        _unmark_cache_active(cache_file)
+
 
 async def ensure_cache_chunk(
     token,
@@ -937,51 +1266,33 @@ async def ensure_cache_chunk(
     chunk_start,
     chunk_length
 ):
-    cache_file = cache_path(
-        token,
-        chunk_index
-    )
+    cache_file = cache_path(token, chunk_index)
 
-    try:
-        stat = cache_file.stat()
-
-        if (
-            stat.st_size == chunk_length
-            and time.time() - stat.st_mtime <= CACHE_TTL
-        ):
-            os.utime(
-                cache_file,
-                None
-            )
-            return cache_file
-
-    except OSError:
-        pass
-
-    cache_key = (
-        f"{token}:{chunk_index}"
-    )
-
-    lock = await get_cache_lock(
-        cache_key
-    )
-
-    async with lock:
+    def valid_cache_file():
         try:
             stat = cache_file.stat()
-
-            if (
+            return (
                 stat.st_size == chunk_length
                 and time.time() - stat.st_mtime <= CACHE_TTL
-            ):
-                os.utime(
-                    cache_file,
-                    None
-                )
-                return cache_file
-
+            )
         except OSError:
-            pass
+            return False
+
+    if valid_cache_file():
+        # mtime doubles as the lightweight last-access timestamp.
+        os.utime(cache_file, None)
+        return cache_file
+
+    # Per-chunk lock is request deduplication: if 10 viewers miss the
+    # same chunk simultaneously, only the first one talks to Telegram.
+    # The remaining requests wait and then reuse the completed cache file.
+    cache_key = f"{token}:{chunk_index}"
+    lock = await get_cache_lock(cache_key)
+
+    async with lock:
+        if valid_cache_file():
+            os.utime(cache_file, None)
+            return cache_file
 
         await download_cache_chunk(
             message,
@@ -990,10 +1301,13 @@ async def ensure_cache_chunk(
             chunk_length
         )
 
-        await asyncio.to_thread(
-            cleanup_cache_sync
-        )
+        # Re-check quotas immediately after a successful write.
+        await asyncio.to_thread(cleanup_cache_sync)
 
+        if not valid_cache_file():
+            raise IOError("Temporary cache chunk was evicted or invalidated")
+
+        os.utime(cache_file, None)
         return cache_file
 
 
@@ -1006,86 +1320,50 @@ async def cached_telegram_stream(
 ):
     end_position = offset + length
 
-    first_chunk = (
-        offset // CACHE_CHUNK_SIZE
-    )
+    first_chunk = offset // CACHE_CHUNK_SIZE
+    last_chunk = (end_position - 1) // CACHE_CHUNK_SIZE
 
-    last_chunk = (
-        (end_position - 1)
-        // CACHE_CHUNK_SIZE
-    )
-
-    for chunk_index in range(
-        first_chunk,
-        last_chunk + 1
-    ):
-        chunk_start = (
-            chunk_index
-            * CACHE_CHUNK_SIZE
-        )
-
-        chunk_end = min(
-            chunk_start
-            + CACHE_CHUNK_SIZE,
-            file_size
-        )
-
-        chunk_length = (
-            chunk_end - chunk_start
-        )
+    for chunk_index in range(first_chunk, last_chunk + 1):
+        chunk_start = chunk_index * CACHE_CHUNK_SIZE
+        chunk_end = min(chunk_start + CACHE_CHUNK_SIZE, file_size)
+        chunk_length = chunk_end - chunk_start
 
         cache_file = await ensure_cache_chunk(
-            token,
-            message,
-            chunk_index,
-            chunk_start,
-            chunk_length
+            token, message, chunk_index, chunk_start, chunk_length
         )
 
-        requested_start = max(
-            offset,
-            chunk_start
-        )
-
-        requested_end = min(
-            end_position,
-            chunk_end
-        )
-
-        read_start = (
-            requested_start - chunk_start
-        )
-
-        read_length = (
-            requested_end - requested_start
-        )
+        requested_start = max(offset, chunk_start)
+        requested_end = min(end_position, chunk_end)
+        read_start = requested_start - chunk_start
+        read_length = requested_end - requested_start
 
         if read_length <= 0:
             continue
 
-        with cache_file.open(
-            "rb"
-        ) as cached_file:
+        _mark_cache_active(cache_file)
+        try:
+            os.utime(cache_file, None)
 
-            cached_file.seek(
-                read_start
-            )
+            with cache_file.open("rb") as cached_file:
+                cached_file.seek(read_start)
+                remaining = read_length
 
-            remaining = read_length
-
-            while remaining > 0:
-                piece = await asyncio.to_thread(
-                    cached_file.read,
-                    min(CHUNK_SIZE, remaining)
-                )
-
-                if not piece:
-                    raise IOError(
-                        "Temporary cache file ended unexpectedly"
+                while remaining > 0:
+                    piece = await asyncio.to_thread(
+                        cached_file.read, min(CHUNK_SIZE, remaining)
                     )
 
-                remaining -= len(piece)
-                yield piece
+                    if not piece:
+                        raise IOError(
+                            "Temporary cache file ended unexpectedly"
+                        )
+
+                    remaining -= len(piece)
+                    yield piece
+
+            os.utime(cache_file, None)
+        finally:
+            _unmark_cache_active(cache_file)
 
 
 @bot.on(events.NewMessage)
@@ -2554,15 +2832,63 @@ async def direct_proxy(
 
     async def stream_generator():
 
-        async for chunk in cached_telegram_stream(
-            token=token,
-            message=message,
-            file_size=file_size,
-            offset=start,
-            length=length
-        ):
+        metric_inc("streams_started")
+        file_semaphore = (
+            await get_file_stream_semaphore(token)
+        )
 
-            yield chunk
+        global_acquired = False
+        file_acquired = False
+
+        try:
+            try:
+                await asyncio.wait_for(
+                    global_stream_semaphore.acquire(),
+                    timeout=STREAM_ACQUIRE_TIMEOUT
+                )
+                global_acquired = True
+
+                await asyncio.wait_for(
+                    file_semaphore.acquire(),
+                    timeout=STREAM_ACQUIRE_TIMEOUT
+                )
+                file_acquired = True
+
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Too many active streams. "
+                        "Please try again shortly."
+                    ),
+                    headers={
+                        "Retry-After": str(
+                            STREAM_ACQUIRE_TIMEOUT
+                        )
+                    }
+                )
+
+            try:
+                async for chunk in cached_telegram_stream(
+                    token=token, message=message, file_size=file_size, offset=start, length=length
+                ):
+                    yield chunk
+                metric_inc("streams_completed")
+            except asyncio.CancelledError:
+                metric_inc("stream_disconnects")
+                raise
+            except Exception:
+                metric_inc("streams_failed")
+                raise
+
+        finally:
+            if file_acquired:
+                file_semaphore.release()
+
+            if global_acquired:
+                global_stream_semaphore.release()
+
+            await remove_file_stream_semaphore(token)
     content_disposition = (
         f'attachment; filename="{quote(real_filename)}"'
         if action == "download"
@@ -2587,6 +2913,18 @@ async def direct_proxy(
         headers=headers
     )
     
+@app.get("/metrics")
+async def metrics():
+    with metrics_lock:
+        snapshot = dict(server_metrics)
+    snapshot["active_stream_slots"] = MAX_CONCURRENT_STREAMS - global_stream_semaphore._value
+    snapshot["active_telegram_downloads"] = MAX_CONCURRENT_TELEGRAM_DOWNLOADS - telegram_download_semaphore._value
+    snapshot["cache_active_chunks"] = len(cache_active_files)
+    snapshot["cache_locks"] = len(cache_locks)
+    snapshot["rate_limit_keys"] = len(request_rate_state)
+    return snapshot
+
+
 # ============================================================
 # 12-HOUR AUTO CLEANUP
 # ============================================================
