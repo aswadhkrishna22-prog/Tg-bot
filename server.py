@@ -2371,30 +2371,155 @@ function stream() {{
     if (!poster) return;
 
     poster.innerHTML = `
-        <video
-            id="mainVideo"
-            controls
-            autoplay
-            playsinline
-            preload="auto"
-            style="
-                width:100%;
-                height:100%;
-                display:block;
-                object-fit:contain;
-                background:#000;
-                border-radius:18px;
-            "
-        >
-            <source src="${{STREAM_URL}}">
-            Your browser does not support video playback.
-        </video>
+        <div style="
+            position:relative;
+            width:100%;
+            height:100%;
+            background:#000;
+            border-radius:18px;
+            overflow:hidden;
+        ">
+            <video
+                id="mainVideo"
+                autoplay
+                playsinline
+                preload="metadata"
+                style="
+                    width:100%;
+                    height:100%;
+                    display:block;
+                    object-fit:contain;
+                    background:#000;
+                    border:0;
+                    outline:0;
+                "
+            >
+                <source src="${{STREAM_URL}}">
+                Your browser does not support video playback.
+            </video>
+
+            <div id="videoError" style="
+                display:none;
+                position:absolute;
+                left:50%;
+                top:50%;
+                transform:translate(-50%,-50%);
+                width:min(88%,420px);
+                box-sizing:border-box;
+                padding:16px;
+                border-radius:14px;
+                background:rgba(0,0,0,.88);
+                color:#fff;
+                text-align:center;
+                font-size:14px;
+                line-height:1.5;
+                z-index:5;
+            ">
+                ⚠️ Browser cannot decode this video's video track.<br>
+                <span style="opacity:.8">Try VLC / MX Player for this file.</span>
+            </div>
+
+            <div id="customControls" style="
+                position:absolute;
+                left:12px;
+                right:12px;
+                bottom:10px;
+                z-index:4;
+                padding:8px 10px;
+                border-radius:12px;
+                background:linear-gradient(180deg,transparent,rgba(0,0,0,.82));
+                box-sizing:border-box;
+            ">
+                <input id="videoSeek" type="range" min="0" max="1000" value="0" step="1"
+                    style="width:100%;margin:0 0 4px;accent-color:#69f7ff;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <button id="videoPlay" type="button" aria-label="Play/Pause" style="
+                        border:0;background:transparent;color:#fff;font-size:22px;padding:2px 6px;
+                    ">▶</button>
+                    <span id="videoTime" style="color:#fff;font-size:12px;font-variant-numeric:tabular-nums;">0:00 / 0:00</span>
+                    <button id="videoMute" type="button" aria-label="Mute" style="
+                        margin-left:auto;border:0;background:transparent;color:#fff;font-size:20px;padding:2px 6px;
+                    ">🔊</button>
+                    <button id="videoFullscreen" type="button" aria-label="Fullscreen" style="
+                        border:0;background:transparent;color:#fff;font-size:19px;padding:2px 6px;
+                    ">⛶</button>
+                </div>
+            </div>
+        </div>
     `;
 
     const video = document.getElementById("mainVideo");
+    const seek = document.getElementById("videoSeek");
+    const playBtn = document.getElementById("videoPlay");
+    const muteBtn = document.getElementById("videoMute");
+    const fullscreenBtn = document.getElementById("videoFullscreen");
+    const timeLabel = document.getElementById("videoTime");
+    const errorBox = document.getElementById("videoError");
+
+    function formatTime(seconds) {{
+        if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const sec = Math.floor(seconds % 60);
+        if (h > 0) return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+        return m + ":" + String(sec).padStart(2, "0");
+    }}
+
+    function updateVideoUI() {{
+        const duration = video.duration;
+        const current = video.currentTime || 0;
+        timeLabel.textContent = formatTime(current) + " / " + formatTime(duration);
+        if (Number.isFinite(duration) && duration > 0) {{
+            seek.value = String(Math.round((current / duration) * 1000));
+        }}
+        playBtn.textContent = video.paused ? "▶" : "Ⅱ";
+        muteBtn.textContent = video.muted ? "🔇" : "🔊";
+    }}
+
+    playBtn.addEventListener("click", () => {{
+        if (video.paused) video.play().catch(() => {{}});
+        else video.pause();
+    }});
+
+    muteBtn.addEventListener("click", () => {{
+        video.muted = !video.muted;
+        updateVideoUI();
+    }});
+
+    fullscreenBtn.addEventListener("click", async () => {{
+        try {{
+            if (video.requestFullscreen) await video.requestFullscreen();
+            else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+        }} catch (_) {{}}
+    }});
+
+    seek.addEventListener("input", () => {{
+        if (Number.isFinite(video.duration) && video.duration > 0) {{
+            video.currentTime = (Number(seek.value) / 1000) * video.duration;
+        }}
+    }});
+
+    video.addEventListener("loadedmetadata", () => {{
+        updateVideoUI();
+        if (video.videoWidth === 0 || video.videoHeight === 0) {{
+            errorBox.style.display = "block";
+            setStatus("STADY-PROXY • VIDEO CODEC NOT SUPPORTED");
+        }}
+    }});
+
+    video.addEventListener("timeupdate", updateVideoUI);
+    video.addEventListener("play", updateVideoUI);
+    video.addEventListener("pause", updateVideoUI);
+    video.addEventListener("volumechange", updateVideoUI);
+    video.addEventListener("error", () => {{
+        if (video.error && video.error.code === MediaError.MEDIA_ERR_DECODE) {{
+            errorBox.style.display = "block";
+            setStatus("STADY-PROXY • VIDEO DECODE ERROR");
+        }}
+    }});
 
     video.play().catch(() => {{
-        video.controls = true;
+        updateVideoUI();
     }});
 
     setStatus("STADY-PROXY • PLAYING ▶");
