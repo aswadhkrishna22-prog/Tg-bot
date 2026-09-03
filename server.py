@@ -782,6 +782,55 @@ def get_mime(filename):
     return mime or "application/octet-stream"
 
 
+def detect_media_profile(filename, mime=None):
+    """Conservatively classify files for browser-vs-external playback.
+
+    This is intentionally filename based: Render does not need FFmpeg just to
+    inspect every Telegram file. Files explicitly marked as HEVC/H.265/10-bit
+    or using MKV are treated as external-player media because browser support
+    is inconsistent. MP4/M4V/WebM/Ogg files without those markers are offered
+    to the browser. This does not transcode or modify the original file.
+    """
+    name = (filename or "").lower()
+    ext = Path(name).suffix
+    mime = (mime or get_mime(filename)).lower()
+
+    codec_markers = (
+        "hevc", "h.265", "h265", "x265", "10bit", "10-bit",
+        "hdr10", "dolbyvision", "dvhe"
+    )
+    has_incompatible_marker = any(marker in name for marker in codec_markers)
+
+    browser_containers = {".mp4", ".m4v", ".webm", ".ogv", ".ogg"}
+    external_containers = {".mkv", ".avi", ".mov", ".ts", ".m2ts", ".mts", ".flv", ".wmv"}
+
+    if has_incompatible_marker or ext in external_containers:
+        return {
+            "browser_ok": False,
+            "reason": "MKV/HEVC/10-bit or another browser-inconsistent format detected",
+            "label": "External Player Recommended",
+            "mime": mime,
+            "extension": ext or "unknown",
+        }
+
+    if ext in browser_containers and mime.startswith(("video/", "audio/")):
+        return {
+            "browser_ok": True,
+            "reason": "Browser-friendly container detected; codec is not guaranteed by filename",
+            "label": "Browser Playback",
+            "mime": mime,
+            "extension": ext or "unknown",
+        }
+
+    return {
+        "browser_ok": False,
+        "reason": "Unknown or browser-inconsistent media format",
+        "label": "External Player Recommended",
+        "mime": mime,
+        "extension": ext or "unknown",
+    }
+
+
 def parse_range(range_header, file_size):
 
     if not range_header:
@@ -2106,18 +2155,13 @@ async def watch(token):
 
     if not row:
         return HTMLResponse(
-        content=stady_error_page(),
-        status_code=404
+            content=stady_error_page(),
+            status_code=404
         )
 
     filename = row["filename"]
-
     safe_name = html.escape(filename)
-
-    encoded_filename = quote(
-        filename,
-        safe=""
-    )
+    encoded_filename = quote(filename, safe="")
 
     stream_url = (
         f"{PUBLIC_URL}/{token}/"
@@ -2125,328 +2169,207 @@ async def watch(token):
     )
 
     file_size = int(row["size"])
+    mime = row["mime"] or get_mime(filename)
+    profile = detect_media_profile(filename, mime)
+    browser_ok = profile["browser_ok"]
+    profile_label = html.escape(profile["label"])
+    profile_reason = html.escape(profile["reason"])
+    detected_mime = html.escape(profile["mime"])
+    detected_ext = html.escape(profile["extension"])
 
     if file_size >= 1024**3:
-
-        size_str = (
-            f"{file_size / 1024**3:.2f} GB"
-        )
-
+        size_str = f"{file_size / 1024**3:.2f} GB"
     elif file_size >= 1024**2:
-
-        size_str = (
-            f"{file_size / 1024**2:.2f} MB"
-        )
-
+        size_str = f"{file_size / 1024**2:.2f} MB"
     else:
+        size_str = f"{file_size / 1024:.2f} KB"
 
-        size_str = (
-            f"{file_size / 1024:.2f} KB"
-        )
+    created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stream_no_scheme = stream_url.replace("https://", "").replace("http://", "")
+    scheme = "https" if stream_url.startswith("https://") else "http"
 
-    created = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
+    browser_button = (
+        '<button class="btn" id="browserBtn" onclick="stream()">▶ Browser Stream</button>'
+        if browser_ok
+        else '<button class="btn disabled" type="button" disabled>⚠ Browser Video Not Recommended</button>'
     )
 
-    stream_no_scheme = (
-        stream_url
-        .replace("https://", "")
-        .replace("http://", "")
-    )
-
-    scheme = (
-        "https"
-        if stream_url.startswith("https://")
-        else "http"
+    initial_media = (
+        f"""<div class="poster-content">
+            <div class="poster-icon">▶</div>
+            <div class="poster-title">Browser-ready media</div>
+            <div class="poster-sub">Tap Browser Stream to start</div>
+        </div>"""
+        if browser_ok else
+        f"""<div class="poster-content">
+            <div class="poster-icon">🎬</div>
+            <div class="poster-title">External Player Recommended</div>
+            <div class="poster-sub">{profile_reason}</div>
+            <div class="poster-codec">{detected_ext} · {detected_mime}</div>
+        </div>"""
     )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
-
 <head>
-
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>STADY-PROXY | {safe_name}</title>
+<style>
+{STADY_CSS}
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
->
-
-<title>
-STADY-PROXY | {safe_name}
-</title>
-
-<style>{STADY_CSS}</style>
-
+/* Final clean player */
+.poster {{
+    position:relative;
+    overflow:hidden;
+    background:#02050a;
+}}
+.poster-content {{
+    position:absolute;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding:24px;
+    box-sizing:border-box;
+    background:radial-gradient(circle at center, rgba(0,234,255,.10), transparent 58%);
+}}
+.poster-icon {{
+    font-size:48px;
+    margin-bottom:12px;
+    filter:drop-shadow(0 0 12px rgba(0,234,255,.8));
+}}
+.poster-title {{font-size:19px;font-weight:800;color:#fff}}
+.poster-sub {{margin-top:8px;font-size:13px;color:#a9bfd0;max-width:390px;line-height:1.5}}
+.poster-codec {{
+    margin-top:12px;
+    padding:7px 11px;
+    border:1px solid rgba(105,247,255,.35);
+    border-radius:999px;
+    font-size:12px;
+    color:#69f7ff;
+    background:rgba(0,0,0,.28);
+}}
+.profile-badge {{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    margin-top:12px;
+    padding:7px 11px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:700;
+    color:#fff;
+    background:rgba(0,0,0,.32);
+    border:1px solid rgba(255,255,255,.16);
+}}
+.disabled {{opacity:.48;cursor:not-allowed}}
+.video-shell {{position:relative;width:100%;height:100%;background:#000;border-radius:18px;overflow:hidden}}
+.video-shell video {{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}}
+.video-controls {{
+    position:absolute;left:10px;right:10px;bottom:10px;z-index:10;
+    padding:8px 10px 7px;border-radius:13px;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.88) 34%);
+    box-sizing:border-box;
+    opacity:1;transition:opacity .2s;
+}}
+.video-controls.hide {{opacity:0;pointer-events:none}}
+.video-seek {{width:100%;height:5px;margin:0 0 6px;accent-color:#69f7ff;cursor:pointer}}
+.control-row {{display:flex;align-items:center;gap:8px;color:#fff}}
+.control-row button {{border:0;background:transparent;color:#fff;font-size:20px;padding:3px 7px;cursor:pointer}}
+.video-time {{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}}
+.control-spacer {{flex:1}}
+.video-error {{
+    display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(88%,420px);box-sizing:border-box;padding:16px;border-radius:14px;
+    background:rgba(0,0,0,.9);color:#fff;text-align:center;font-size:14px;line-height:1.5;z-index:12;
+}}
+</style>
 </head>
-
 <body>
-
 <main class="page">
-
-<div class="brand">
-STADY-PROXY
-</div>
-
+<div class="brand">STADY-PROXY</div>
 <section class="frame">
 
-<div class="poster">
+<div class="poster" id="playerArea">
+    {initial_media}
+</div>
 
-<img
-src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-alt="Video thumbnail"
->
-
-<button
-    class="play"
-    aria-label="Play"
-    onclick="stream()"
->
-▶
-</button>
-
+<div style="text-align:center">
+    <span class="profile-badge">● {profile_label}</span>
 </div>
 
 <div class="actions">
+    {browser_button}
+    <button class="btn" onclick="togglePlayers()">🎬 External Players</button>
+    <a class="btn" href="{stream_url}&action=download" download style="text-decoration:none;text-align:center;display:block;">⬇ Download</a>
 
-<button
-    class="btn"
-    onclick="togglePlayers()"
->
-⏵ Stream ⏵
-</button>
-<a
-    class="btn"
-    href="{stream_url}&action=download"
-    download
-    style="text-decoration:none;text-align:center;display:block;"
->
-⬇ Download
-</a>
-<div
-    class="players"
-    id="players"
->
-<button onclick="openPlayer('mx')">
-MX Player
-</button>
-
-<button onclick="openPlayer('vlc')">
-VLC Mobile
-</button>
-
-<button onclick="openPlayer('playit')">
-PlayIt
-</button>
-
-<button onclick="openPlayer('splayer')">
-SPlayer
-</button>
-
-<button onclick="openPlayer('jplayer')">
-JPlayer
-</button>
-
-<button onclick="openPlayer('kmplayer')">
-KMPlayer
-</button>
-
-<button onclick="openPlayer('hdplayer')">
-HDPlayer
-</button>
-
-<button onclick="openPlayer('nplayer')">
-nPlayer
-</button>
-
-</div>
-
+    <div class="players" id="players">
+        <button onclick="openPlayer('mx')">MX Player</button>
+        <button onclick="openPlayer('vlc')">VLC Mobile</button>
+        <button onclick="openPlayer('playit')">PlayIt</button>
+        <button onclick="openPlayer('kmplayer')">KMPlayer</button>
+        <button onclick="openPlayer('nplayer')">nPlayer</button>
+    </div>
 </div>
 
 <div class="info">
-
-<div>
-📄 <b>File Name:</b>
-<span>{safe_name}</span>
-</div>
-
-<div>
-☰ <b>File Size:</b>
-<span>{size_str}</span>
-</div>
-
-<div>
-👤 <b>File Owner:</b>
-<span>STADY-PROXY</span>
-</div>
-
-<div>
-◷ <b>Created Time:</b>
-<span>{created}</span>
-</div>
-
+<div>📄 <b>File Name:</b> <span>{safe_name}</span></div>
+<div>☰ <b>File Size:</b> <span>{size_str}</span></div>
+<div>🎞 <b>Detected:</b> <span>{detected_ext} · {detected_mime}</span></div>
+<div>👤 <b>File Owner:</b> <span>STADY-PROXY</span></div>
+<div>◷ <b>Created Time:</b> <span>{created}</span></div>
 </div>
 
 </section>
 
-<div
-    class="status"
-    id="status"
->
-STADY-PROXY • READY
-</div>
+<div class="status" id="status">STADY-PROXY • READY</div>
 
-<div style="
-    text-align:center;
-    margin-top:22px;
-    padding-bottom:8px;
-    font-size:14px;
-    color:#888;
-">
-     Made with ♥ by
-    <a
-        href="https://www.instagram.com/2aswadhh_._kr"
-        target="_blank"
-        rel="noopener noreferrer"
-        style="
-            display:inline-flex;
-            align-items:center;
-            gap:6px;
-            margin-left:4px;
-            color:#ff2bd6;
-            text-decoration:none;
-            font-weight:700;
-            text-shadow:
-                0 0 5px rgba(255,43,214,.8),
-                0 0 12px rgba(255,43,214,.55);
-        "
-    >
-        <svg
-            width="17"
-            height="17"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-        >
-            <rect
-                x="3"
-                y="3"
-                width="18"
-                height="18"
-                rx="5"
-                stroke="currentColor"
-                stroke-width="2"
-            />
-            <circle
-                cx="12"
-                cy="12"
-                r="4"
-                stroke="currentColor"
-                stroke-width="2"
-            />
-            <circle
-                cx="17.5"
-                cy="6.5"
-                r="1"
-                fill="currentColor"
-            />
-        </svg>
-        aswadh_kr
-    </a>
+<div style="text-align:center;margin-top:22px;padding-bottom:8px;font-size:14px;color:#888;">
+Made with ♥ by
+<a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px;color:#ff2bd6;text-decoration:none;font-weight:700;text-shadow:0 0 5px rgba(255,43,214,.8),0 0 12px rgba(255,43,214,.55);">aswadh_kr</a>
 </div>
-
 </main>
 
 <script>
-
 const STREAM_URL = {stream_url!r};
+const BROWSER_OK = {str(browser_ok).lower()};
 
 function setStatus(text) {{
-    document.getElementById("status").textContent = text;
+    const el = document.getElementById("status");
+    if (el) el.textContent = text;
 }}
 
 function stream() {{
+    if (!BROWSER_OK) {{
+        setStatus("STADY-PROXY • USE VLC / MX PLAYER");
+        togglePlayers(true);
+        return;
+    }}
 
-    const poster = document.querySelector(".poster");
-    if (!poster) return;
+    const area = document.getElementById("playerArea");
+    if (!area) return;
 
-    poster.innerHTML = `
-        <div style="
-            position:relative;
-            width:100%;
-            height:100%;
-            background:#000;
-            border-radius:18px;
-            overflow:hidden;
-        ">
-            <video
-                id="mainVideo"
-                autoplay
-                playsinline
-                preload="metadata"
-                style="
-                    width:100%;
-                    height:100%;
-                    display:block;
-                    object-fit:contain;
-                    background:#000;
-                    border:0;
-                    outline:0;
-                "
-            >
-                <source src="${{STREAM_URL}}">
-                Your browser does not support video playback.
-            </video>
-
-            <div id="videoError" style="
-                display:none;
-                position:absolute;
-                left:50%;
-                top:50%;
-                transform:translate(-50%,-50%);
-                width:min(88%,420px);
-                box-sizing:border-box;
-                padding:16px;
-                border-radius:14px;
-                background:rgba(0,0,0,.88);
-                color:#fff;
-                text-align:center;
-                font-size:14px;
-                line-height:1.5;
-                z-index:5;
-            ">
+    area.innerHTML = `
+        <div class="video-shell" id="videoShell">
+            <video id="mainVideo" autoplay playsinline preload="metadata" src="${{STREAM_URL}}"></video>
+            <div id="videoError" class="video-error">
                 ⚠️ Browser cannot decode this video's video track.<br>
-                <span style="opacity:.8">Try VLC / MX Player for this file.</span>
+                <span style="opacity:.8">Use VLC / MX Player for this file.</span>
             </div>
-
-            <div id="customControls" style="
-                position:absolute;
-                left:12px;
-                right:12px;
-                bottom:10px;
-                z-index:4;
-                padding:8px 10px;
-                border-radius:12px;
-                background:linear-gradient(180deg,transparent,rgba(0,0,0,.82));
-                box-sizing:border-box;
-            ">
-                <input id="videoSeek" type="range" min="0" max="1000" value="0" step="1"
-                    style="width:100%;margin:0 0 4px;accent-color:#69f7ff;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <button id="videoPlay" type="button" aria-label="Play/Pause" style="
-                        border:0;background:transparent;color:#fff;font-size:22px;padding:2px 6px;
-                    ">▶</button>
-                    <span id="videoTime" style="color:#fff;font-size:12px;font-variant-numeric:tabular-nums;">0:00 / 0:00</span>
-                    <button id="videoMute" type="button" aria-label="Mute" style="
-                        margin-left:auto;border:0;background:transparent;color:#fff;font-size:20px;padding:2px 6px;
-                    ">🔊</button>
-                    <button id="videoFullscreen" type="button" aria-label="Fullscreen" style="
-                        border:0;background:transparent;color:#fff;font-size:19px;padding:2px 6px;
-                    ">⛶</button>
+            <div class="video-controls" id="videoControls">
+                <input id="videoSeek" class="video-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+                <div class="control-row">
+                    <button id="videoPlay" type="button" aria-label="Play or pause">▶</button>
+                    <span id="videoTime" class="video-time">0:00 / 0:00</span>
+                    <span class="control-spacer"></span>
+                    <button id="videoMute" type="button" aria-label="Mute">🔊</button>
+                    <button id="videoFullscreen" type="button" aria-label="Fullscreen">⛶</button>
                 </div>
             </div>
-        </div>
-    `;
+        </div>`;
 
     const video = document.getElementById("mainVideo");
     const seek = document.getElementById("videoSeek");
@@ -2455,145 +2378,95 @@ function stream() {{
     const fullscreenBtn = document.getElementById("videoFullscreen");
     const timeLabel = document.getElementById("videoTime");
     const errorBox = document.getElementById("videoError");
+    const controls = document.getElementById("videoControls");
+    let hideTimer = null;
 
     function formatTime(seconds) {{
         if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
-        const sec = Math.floor(seconds % 60);
-        if (h > 0) return h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
-        return m + ":" + String(sec).padStart(2, "0");
+        const s = Math.floor(seconds % 60);
+        if (h > 0) return h + ":" + String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+        return m + ":" + String(s).padStart(2,"0");
     }}
 
-    function updateVideoUI() {{
+    function updateUI() {{
         const duration = video.duration;
         const current = video.currentTime || 0;
         timeLabel.textContent = formatTime(current) + " / " + formatTime(duration);
-        if (Number.isFinite(duration) && duration > 0) {{
-            seek.value = String(Math.round((current / duration) * 1000));
-        }}
+        if (Number.isFinite(duration) && duration > 0) seek.value = String(Math.round((current / duration) * 1000));
         playBtn.textContent = video.paused ? "▶" : "Ⅱ";
         muteBtn.textContent = video.muted ? "🔇" : "🔊";
     }}
 
+    function showControls() {{
+        controls.classList.remove("hide");
+        clearTimeout(hideTimer);
+        if (!video.paused) hideTimer = setTimeout(() => controls.classList.add("hide"), 2500);
+    }}
+
     playBtn.addEventListener("click", () => {{
-        if (video.paused) video.play().catch(() => {{}});
-        else video.pause();
+        if (video.paused) video.play().catch(() => {{}}); else video.pause();
+        showControls();
     }});
-
-    muteBtn.addEventListener("click", () => {{
-        video.muted = !video.muted;
-        updateVideoUI();
-    }});
-
+    muteBtn.addEventListener("click", () => {{ video.muted = !video.muted; updateUI(); showControls(); }});
     fullscreenBtn.addEventListener("click", async () => {{
         try {{
-            if (video.requestFullscreen) await video.requestFullscreen();
+            const shell = document.getElementById("videoShell");
+            if (shell.requestFullscreen) await shell.requestFullscreen();
             else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
         }} catch (_) {{}}
     }});
-
     seek.addEventListener("input", () => {{
-        if (Number.isFinite(video.duration) && video.duration > 0) {{
-            video.currentTime = (Number(seek.value) / 1000) * video.duration;
-        }}
+        if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = (Number(seek.value) / 1000) * video.duration;
+        showControls();
     }});
-
     video.addEventListener("loadedmetadata", () => {{
-        updateVideoUI();
+        updateUI();
         if (video.videoWidth === 0 || video.videoHeight === 0) {{
             errorBox.style.display = "block";
             setStatus("STADY-PROXY • VIDEO CODEC NOT SUPPORTED");
         }}
     }});
-
-    video.addEventListener("timeupdate", updateVideoUI);
-    video.addEventListener("play", updateVideoUI);
-    video.addEventListener("pause", updateVideoUI);
-    video.addEventListener("volumechange", updateVideoUI);
+    video.addEventListener("timeupdate", updateUI);
+    video.addEventListener("play", () => {{ updateUI(); showControls(); setStatus("STADY-PROXY • PLAYING ▶"); }});
+    video.addEventListener("pause", () => {{ updateUI(); showControls(); }});
+    video.addEventListener("volumechange", updateUI);
+    video.addEventListener("waiting", () => setStatus("STADY-PROXY • BUFFERING…"));
+    video.addEventListener("canplay", () => setStatus("STADY-PROXY • READY ▶"));
     video.addEventListener("error", () => {{
-        if (video.error && video.error.code === MediaError.MEDIA_ERR_DECODE) {{
+        if (video.error && (video.error.code === MediaError.MEDIA_ERR_DECODE || video.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {{
             errorBox.style.display = "block";
-            setStatus("STADY-PROXY • VIDEO DECODE ERROR");
+            setStatus("STADY-PROXY • BROWSER VIDEO NOT SUPPORTED");
         }}
     }});
+    video.addEventListener("click", () => {{ if (video.paused) video.play().catch(() => {{}}); else video.pause(); showControls(); }});
+    document.getElementById("videoShell").addEventListener("mousemove", showControls);
+    document.getElementById("videoShell").addEventListener("touchstart", showControls, {{passive:true}});
 
-    video.play().catch(() => {{
-        updateVideoUI();
-    }});
-
-    setStatus("STADY-PROXY • PLAYING ▶");
+    video.play().catch(() => {{ updateUI(); }});
+    setStatus("STADY-PROXY • LOADING ▶");
 }}
 
-function togglePlayers() {{
-
-    const players =
-        document.getElementById("players");
-
-    players.style.display =
-        players.style.display === "block"
-        ? "none"
-        : "block";
+function togglePlayers(forceOpen=false) {{
+    const players = document.getElementById("players");
+    if (!players) return;
+    if (forceOpen) players.style.display = "block";
+    else players.style.display = players.style.display === "block" ? "none" : "block";
 }}
 
 function openPlayer(player) {{
-
     let intent = "";
-
-    if (player === "mx") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.mxtech.videoplayer.ad;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "vlc") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=org.videolan.vlc;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "playit") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.playit.videoplayer;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "kmplayer") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.kmplayer;" +
-        "type=video/*;end;";
-    }}
-
-    if (intent) {{
-        location.href = intent;
-    }}
-
-    else {{
-        location.href = STREAM_URL;
-    }}
+    if (player === "mx") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.mxtech.videoplayer.ad;type=video/*;end;";
+    else if (player === "vlc") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=org.videolan.vlc;type=video/*;end;";
+    else if (player === "playit") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.playit.videoplayer;type=video/*;end;";
+    else if (player === "kmplayer") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.kmplayer;type=video/*;end;";
+    else if (player === "nplayer") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};type=video/*;end;";
+    if (intent) location.href = intent; else location.href = STREAM_URL;
 }}
-
 </script>
-
 </body>
 </html>"""
-
 
 
 # ============================================================
@@ -3273,3 +3146,135 @@ if __name__ == "__main__":
         print(
             "\n[+] Server stopped."
 )
+
+
+# ============================================================
+# SERVER SECURITY V3 INTEGRATION — APPEND ONLY
+# ============================================================
+# Shared PostgreSQL state lets the security bot enforce blocks and
+# lockdown even when the two services run as separate processes.
+
+SECURITY_V3_SERVER_ENABLED = os.getenv("SECURITY_V3_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+SECURITY_V3_SERVER_CACHE_TTL = max(2, float(os.getenv("SECURITY_V3_SERVER_CACHE_TTL", "5")))
+SECURITY_V3_SERVER_MAX_STREAMS_PER_USER = max(1, int(os.getenv("SECURITY_V3_SERVER_MAX_STREAMS_PER_USER", "5")))
+security_v3_server_state = {"lockdown": False, "lockdown_checked": 0.0}
+security_v3_server_user_streams = {}
+security_v3_server_lock = threading.Lock()
+
+
+def security_v3_server_control_state():
+    now = time.monotonic()
+    if now - security_v3_server_state["lockdown_checked"] < SECURITY_V3_SERVER_CACHE_TTL:
+        return security_v3_server_state["lockdown"]
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT lockdown FROM security_v3_control WHERE id=1")
+                row = cursor.fetchone()
+        value = bool(row and row.get("lockdown"))
+        security_v3_server_state["lockdown"] = value
+        security_v3_server_state["lockdown_checked"] = now
+        return value
+    except Exception as error:
+        # Fail open on control-plane DB errors so an accidental security DB outage
+        # does not take down normal playback. Existing rate limits still apply.
+        print("[SECURITY V3] Control-state check failed:", error)
+        return False
+
+
+def security_v3_server_temp_blocked(user_id):
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM security_v3_temp_blocks WHERE user_id=%s AND expires_at > NOW()",
+                    (int(user_id),)
+                )
+                return cursor.fetchone() is not None
+    except Exception as error:
+        print("[SECURITY V3] Temp-block check failed:", error)
+        return False
+
+
+def security_v3_server_log_access(chat_id, ip, action, token=None, status_code=200):
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS access_logs (
+                        id BIGSERIAL PRIMARY KEY,
+                        chat_id BIGINT,
+                        ip TEXT,
+                        action TEXT,
+                        token TEXT,
+                        status_code INTEGER,
+                        accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cursor.execute("""
+                    INSERT INTO access_logs(chat_id, ip, action, token, status_code, accessed_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                """, (int(chat_id) if chat_id is not None else 0, str(ip or "unknown"), str(action), token, int(status_code)))
+            db.commit()
+    except Exception as error:
+        print("[SECURITY V3] access log failed:", error)
+
+
+def security_v3_server_user_id_from_token(token):
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT chat_id FROM files WHERE token=%s", (token,))
+                row = cursor.fetchone()
+        return int(row["chat_id"]) if row and row.get("chat_id") is not None else 0
+    except Exception:
+        return 0
+
+
+async def security_v3_server_middleware(request, call_next):
+    if not SECURITY_V3_SERVER_ENABLED:
+        return await call_next(request)
+    path = request.url.path
+    client_ip = request.client.host if request.client else "unknown"
+    token = None
+    action = "request"
+    parts = path.strip("/").split("/")
+    if parts and parts[0] and parts[0] not in {"health", "metrics", "share", "receive", "pair", "stady-proxy-404.png"}:
+        token = parts[0]
+    user_id = security_v3_server_user_id_from_token(token) if token else 0
+    if user_id and security_v3_server_temp_blocked(user_id):
+        metric_inc("rate_limited")
+        security_v3_server_log_access(user_id, client_ip, "blocked", token, 403)
+        return JSONResponse({"ok": False, "error": "Access temporarily blocked"}, status_code=403)
+    if path.startswith("/share/") or (token and path.count("/") >= 2):
+        action = "stream"
+        if security_v3_server_control_state():
+            security_v3_server_log_access(user_id, client_ip, "lockdown", token, 503)
+            return JSONResponse({"ok": False, "error": "Proxy is temporarily in security lockdown"}, status_code=503)
+        if user_id:
+            with security_v3_server_lock:
+                active = security_v3_server_user_streams.get(user_id, 0)
+                if active >= SECURITY_V3_SERVER_MAX_STREAMS_PER_USER:
+                    security_v3_server_log_access(user_id, client_ip, "stream", token, 429)
+                    return JSONResponse({"ok": False, "error": "Too many active streams", "retry_after": 15}, status_code=429)
+                security_v3_server_user_streams[user_id] = active + 1
+    try:
+        response = await call_next(request)
+        if user_id:
+            security_v3_server_log_access(user_id, client_ip, action, token, response.status_code)
+        return response
+    finally:
+        if user_id and action == "stream":
+            with security_v3_server_lock:
+                current = security_v3_server_user_streams.get(user_id, 1) - 1
+                if current > 0:
+                    security_v3_server_user_streams[user_id] = current
+                else:
+                    security_v3_server_user_streams.pop(user_id, None)
+
+
+# Register V3 middleware additively after the original middleware function definitions.
+try:
+    app.middleware("http")(security_v3_server_middleware)
+except Exception as error:
+    print("[SECURITY V3] Middleware registration failed:", error)
