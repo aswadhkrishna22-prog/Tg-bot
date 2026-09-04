@@ -2302,6 +2302,19 @@ async def watch(token):
 
 <div class="status" id="status" style="margin-top:18px;">STADY-PROXY • READY</div>
 
+<footer class="footer">
+    Made with
+    <span class="heart">♥</span>
+    by
+    <a href="https://www.instagram.com/2aswadhh_._kr"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="instagram-link">
+        <span class="instagram-icon">◎</span>
+        @aswadh_kr
+    </a>
+</footer>
+
 </main>
 
 <script>
