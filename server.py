@@ -777,46 +777,9 @@ def clean_filename(name):
 
 def get_mime(filename):
 
-    # Telegram can occasionally store a generic/incorrect MIME type
-    # (for example application/zip) for a real media file.  Prefer the
-    # filename extension for common media containers so browsers receive
-    # the correct Content-Type.
-    ext = Path(filename or "").suffix.lower()
-    media_mimes = {
-        ".mp4": "video/mp4",
-        ".m4v": "video/mp4",
-        ".webm": "video/webm",
-        ".ogv": "video/ogg",
-        ".ogg": "audio/ogg",
-        ".mkv": "video/x-matroska",
-        ".mov": "video/quicktime",
-        ".avi": "video/x-msvideo",
-        ".ts": "video/mp2t",
-        ".m2ts": "video/mp2t",
-        ".mts": "video/mp2t",
-        ".flv": "video/x-flv",
-        ".wmv": "video/x-ms-wmv",
-    }
-    if ext in media_mimes:
-        return media_mimes[ext]
-
     mime, _ = mimetypes.guess_type(filename)
 
     return mime or "application/octet-stream"
-
-
-def resolve_media_mime(filename, stored_mime=None):
-    # For known media extensions, always use the canonical media MIME.
-    # This prevents a stale Telegram/DB value such as application/zip from
-    # breaking browser playback or the HTML5 media type detection.
-    ext = Path(filename or "").suffix.lower()
-    canonical = get_mime(filename)
-    if ext in {
-        ".mp4", ".m4v", ".webm", ".ogv", ".ogg", ".mkv",
-        ".mov", ".avi", ".ts", ".m2ts", ".mts", ".flv", ".wmv"
-    }:
-        return canonical
-    return (stored_mime or canonical or "application/octet-stream").lower()
 
 
 def detect_media_profile(filename, mime=None):
@@ -841,23 +804,10 @@ def detect_media_profile(filename, mime=None):
     browser_containers = {".mp4", ".m4v", ".webm", ".ogv", ".ogg"}
     external_containers = {".mkv", ".avi", ".mov", ".ts", ".m2ts", ".mts", ".flv", ".wmv"}
 
-    # MKV is handled by the client-side browser player below.  The container
-    # itself is not handed to the native <video> element; Mediabunny reads the
-    # Matroska stream over HTTP Range requests and decodes supported codecs via
-    # WebCodecs.  Codec support is still device/browser dependent.
-    if ext == ".mkv":
-        return {
-            "browser_ok": True,
-            "reason": "MKV Browser Player (client-side demux/decode)",
-            "label": "Browser MKV Player",
-            "mime": mime,
-            "extension": ext,
-        }
-
     if has_incompatible_marker or ext in external_containers:
         return {
             "browser_ok": False,
-            "reason": "HEVC/10-bit or another browser-inconsistent format detected",
+            "reason": "MKV/HEVC/10-bit or another browser-inconsistent format detected",
             "label": "External Player Recommended",
             "mime": mime,
             "extension": ext or "unknown",
@@ -1841,254 +1791,34 @@ async def start_command(event):
 # ============================================================
 
 STADY_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Poppins:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 *{box-sizing:border-box}
-
-html,body{
-    margin:0;
-    min-height:100%;
-    font-family:Poppins,Arial,sans-serif;
-    background:#030914;
-    color:#eaf7ff;
-}
-
-body{
-    overflow-x:hidden;
-    background:
-        radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
-        radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
-        linear-gradient(180deg,#020812,#061629 55%,#020812);
-}
-
-body:before{
-    content:"";
-    position:fixed;
-    inset:0;
-    pointer-events:none;
-    opacity:.32;
-    background-image:
-        linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
-        linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
-    background-size:34px 34px;
-    mask-image:linear-gradient(
-        to bottom,
-        transparent,
-        #000 12%,
-        #000 85%,
-        transparent
-    );
-}
-
-.page{
-    width:min(720px,100%);
-    margin:auto;
-    padding:22px 14px 45px;
-}
-
-.brand{
-    text-align:center;
-    font-family:Orbitron,sans-serif;
-    font-size:clamp(28px,7vw,46px);
-    font-weight:800;
-    letter-spacing:2px;
-    margin:8px 0 20px;
-    color:#69f7ff;
-    text-shadow:
-        0 0 8px #00eaff,
-        0 0 22px #7c28ff,
-        0 0 40px #ff18d5;
-}
-
-.frame{
-    position:relative;
-    padding:12px;
-    border:2px solid #42eaff;
-    border-radius:15px;
-    background:
-        linear-gradient(
-            145deg,
-            rgba(12,43,72,.9),
-            rgba(4,13,28,.94)
-        );
-    box-shadow:
-        0 0 10px #00eaff,
-        inset 0 0 20px rgba(0,234,255,.15),
-        0 0 30px rgba(255,0,213,.2);
-}
-
-.frame:before,
-.frame:after{
-    content:"";
-    position:absolute;
-    height:5px;
-    width:90px;
-    top:-5px;
-    background:linear-gradient(
-        90deg,
-        #00eaff,
-        #bdfcff,
-        #ff24d7
-    );
-    box-shadow:0 0 12px #00eaff;
-    border-radius:4px;
-}
-
-.frame:before{left:35px}
-.frame:after{right:35px}
-
-.poster{
-    position:relative;
-    overflow:hidden;
-    border:2px solid #36f3ff;
-    border-radius:8px;
-    aspect-ratio:16/9;
-    background:#0a2039;
-    box-shadow:
-        inset 0 0 22px rgba(0,255,255,.35),
-        0 0 14px rgba(0,234,255,.45);
-}
-
-.poster img{
-    width:100%;
-    height:100%;
-    display:block;
-    object-fit:cover;
-}
-
-.play{
-    position:absolute;
-    left:50%;
-    top:50%;
-    transform:translate(-50%,-50%);
-    width:118px;
-    height:82px;
-    border:2px solid #9afcff;
-    border-radius:16px;
-    background:rgba(75,90,112,.58);
-    backdrop-filter:blur(5px);
-    color:#dffcff;
-    font-size:44px;
-    line-height:78px;
-    text-align:center;
-    text-shadow:0 0 10px #00eaff;
-    box-shadow:0 0 18px rgba(0,238,255,.35);
-    cursor:pointer;
-}
-
-.actions{
-    display:grid;
-    gap:14px;
-    margin:18px 0;
-}
-
-.btn{
-    appearance:none;
-    border:2px solid #38f5ff;
-    border-radius:10px;
-    padding:15px 12px;
-    width:100%;
-    font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
-    color:#eaffff;
-    cursor:pointer;
-    background:
-        linear-gradient(
-            180deg,
-            rgba(17,72,103,.95),
-            rgba(10,33,62,.98)
-        );
-    box-shadow:
-        0 0 9px rgba(0,238,255,.75),
-        inset 0 0 16px rgba(0,238,255,.12),
-        0 5px 0 rgba(255,0,204,.35);
-    transition:.18s transform,.18s filter;
-}
-
-.btn:hover{
-    filter:brightness(1.25);
-    transform:translateY(-2px);
-}
-
-.btn:active{
-    transform:translateY(1px);
-}
-
-.players{
-    display:none;
-    border-radius:0 0 18px 18px;
-    background:#101b28;
-    margin-top:-14px;
-    padding:22px 12px 18px;
-    text-align:center;
-    box-shadow:0 8px 18px rgba(0,0,0,.35);
-    font-size:18px;
-}
-
-.players button{
-    display:block;
-    width:100%;
-    border:0;
-    background:none;
-    color:#f0f5ff;
-    font:inherit;
-    padding:8px;
-    cursor:pointer;
-}
-
-.players button:hover{
-    color:#56efff;
-}
-
-.info{
-    margin-top:14px;
-    padding:16px 4px 8px;
-    font-size:16px;
-    line-height:2;
-    color:#e7f4ff;
-}
-
-.info div{
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
-
-.info b{
-    font-weight:500;
-}
-
-.status{
-    font-size:13px;
-    color:#8edfff;
-    text-align:center;
-    margin-top:8px;
-    opacity:.8;
-}
-
-@media(max-width:480px){
-
-    .page{
-        padding-left:9px;
-        padding-right:9px;
-    }
-
-    .frame{
-        padding:9px;
-    }
-
-    .play{
-        width:95px;
-        height:68px;
-        line-height:64px;
-        font-size:34px;
-    }
-
-    .info{
-        font-size:14px;
-    }
-}
+html,body{margin:0;min-height:100%;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#05070d;color:#eef2ff}
+body{overflow-x:hidden;background:
+ radial-gradient(circle at 8% 8%,rgba(124,58,237,.13),transparent 30%),
+ radial-gradient(circle at 92% 42%,rgba(6,182,212,.09),transparent 28%),
+ linear-gradient(180deg,#05070d 0%,#070a12 52%,#04060b 100%)}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.16;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
+.page{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:24px 0 44px;position:relative;z-index:1}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:8px 2px 22px;border-bottom:1px solid rgba(148,163,184,.10)}
+.brand-wrap{display:flex;align-items:center;gap:12px;min-width:0}
+.logo-mark{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 10px 35px rgba(99,102,241,.24);font-size:21px;font-weight:800;color:#fff}
+.brand-name{font-size:21px;font-weight:800;letter-spacing:.4px;white-space:nowrap}.brand-name span{color:#22d3ee}.brand-sub{margin-top:3px;color:#7f8ba3;font-size:12px}
+.top-actions{display:flex;align-items:center;gap:9px}.online{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid rgba(34,197,94,.13);border-radius:999px;background:rgba(15,23,42,.58);color:#a7f3d0;font-size:12px;font-weight:700}.online i{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,.75)}
+.top-btn,.menu-btn{border:1px solid rgba(124,58,237,.62);background:rgba(10,14,25,.78);color:#f5f7ff;border-radius:11px;padding:10px 14px;font:600 13px Inter;cursor:pointer;text-decoration:none;transition:.18s}.top-btn:hover,.menu-btn:hover{transform:translateY(-1px);border-color:#8b5cf6;background:rgba(20,16,39,.95)}.menu-btn{width:40px;padding:10px 0;border-color:rgba(148,163,184,.18);font-size:18px}
+.hero{text-align:center;padding:44px 12px 30px}.hero h1{margin:0;font-size:clamp(32px,5vw,52px);line-height:1.08;letter-spacing:-1.8px;font-weight:800;background:linear-gradient(90deg,#a855f7 0%,#60a5fa 48%,#22d3ee 100%);-webkit-background-clip:text;background-clip:text;color:transparent}.hero p{margin:12px auto 0;color:#94a3b8;font-size:16px;max-width:620px}
+.frame{border:1px solid rgba(99,102,241,.18);background:linear-gradient(180deg,rgba(10,14,25,.86),rgba(7,10,18,.94));border-radius:22px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.34)}
+.player-wrap{padding:12px}.poster{position:relative;width:100%;aspect-ratio:16/9;min-height:260px;overflow:hidden;border-radius:16px;background:#03050a center/cover no-repeat url('https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=1600&q=85');border:1px solid rgba(148,163,184,.12)}.poster:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,5,12,.12),rgba(2,5,12,.54))}.poster-content{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}.poster-icon{width:82px;height:82px;border-radius:50%;display:grid;place-items:center;background:rgba(3,7,18,.78);border:2px solid transparent;background-image:linear-gradient(#07101c,#07101c),linear-gradient(135deg,#a855f7,#22d3ee);background-origin:border-box;background-clip:padding-box,border-box;box-shadow:0 0 45px rgba(34,211,238,.16),0 0 35px rgba(168,85,247,.16);font-size:31px;color:#fff}.poster-title{margin-top:16px;font-size:18px;font-weight:700}.poster-sub{margin-top:7px;color:#c0cadb;font-size:13px;max-width:430px;line-height:1.5}.poster-codec,.profile-badge{display:inline-flex;align-items:center;gap:7px;margin-top:12px;padding:7px 11px;border:1px solid rgba(148,163,184,.18);border-radius:999px;background:rgba(2,6,16,.58);color:#cbd5e1;font-size:12px}.profile-row{text-align:center;padding:0 12px 10px}.profile-badge{color:#a5f3fc;border-color:rgba(34,211,238,.18)}
+.video-shell{position:relative;width:100%;height:100%;background:#000;border-radius:16px;overflow:hidden}.video-shell video{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}.video-controls{position:absolute;left:10px;right:10px;bottom:10px;z-index:10;padding:8px 10px 7px;border-radius:13px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.9) 34%);opacity:1;transition:opacity .2s}.video-controls.hide{opacity:0;pointer-events:none}.video-seek{width:100%;height:5px;margin:0 0 6px;accent-color:#8b5cf6;cursor:pointer}.control-row{display:flex;align-items:center;gap:8px;color:#fff}.control-row button{border:0;background:transparent;color:#fff;font-size:20px;padding:3px 7px;cursor:pointer}.video-time{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.control-spacer{flex:1}.video-error{display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(88%,420px);padding:16px;border-radius:14px;background:rgba(0,0,0,.9);color:#fff;text-align:center;font-size:14px;line-height:1.5;z-index:12}
+.action-panel{padding:4px 20px 20px}.primary-actions{display:grid;grid-template-columns:1fr 1fr;gap:14px}.btn{border:1px solid rgba(148,163,184,.15);border-radius:15px;min-height:74px;padding:13px 16px;background:rgba(15,23,42,.72);color:#f8fafc;text-decoration:none;font:600 17px Inter;cursor:pointer;transition:.18s;box-shadow:inset 0 1px rgba(255,255,255,.025)}.btn small{display:block;margin-top:5px;color:#94a3b8;font-size:12px;font-weight:500}.btn.stream-btn{border-color:rgba(168,85,247,.7);background:linear-gradient(135deg,rgba(76,29,149,.22),rgba(15,23,42,.72))}.btn.download-btn{border-color:rgba(34,211,238,.72);background:linear-gradient(135deg,rgba(8,145,178,.13),rgba(15,23,42,.72))}.btn:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(0,0,0,.24)}.secondary-actions{display:flex;gap:10px;margin-top:10px}.secondary-actions .btn{min-height:46px;font-size:13px;padding:10px 14px;flex:1}.disabled{opacity:.45;cursor:not-allowed}
+.players{display:none;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px;padding:10px;border:1px solid rgba(148,163,184,.10);border-radius:14px;background:rgba(2,6,16,.55)}.players button{border:1px solid rgba(148,163,184,.14);background:#0b1120;color:#dbe5f5;border-radius:10px;padding:10px 7px;font:600 12px Inter;cursor:pointer}.players button:hover{border-color:#7c3aed;background:#11162a}
+.info{margin:0 20px 20px;border:1px solid rgba(148,163,184,.12);border-radius:16px;overflow:hidden;background:rgba(8,12,22,.64)}.info-head{display:flex;align-items:center;gap:10px;padding:17px 20px;border-bottom:1px solid rgba(148,163,184,.10);color:#b9c5da;font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}.info-head .ico{color:#a855f7;font-size:18px}.info-row{display:grid;grid-template-columns:190px 1fr;gap:20px;padding:16px 20px;border-bottom:1px solid rgba(148,163,184,.07);font-size:14px}.info-row:last-child{border-bottom:0}.info-label{color:#8290a8}.info-value{color:#cbd5e1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.verified{color:#c4b5fd;font-weight:700}
+.features{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.feature{padding:17px;border:1px solid rgba(148,163,184,.11);border-radius:14px;background:rgba(8,12,22,.64)}.feature-icon{font-size:22px;margin-bottom:12px}.feature strong{display:block;font-size:13px}.feature span{display:block;margin-top:5px;color:#77849b;font-size:11px;line-height:1.4}
+.status{text-align:center;color:#7c8ba3;font-size:12px;margin:18px 0}.footer{text-align:center;color:#68758c;font-size:12px;padding-top:10px}.footer .brand-footer{color:#a78bfa;font-weight:700}.footer a{color:#ec4899;text-decoration:none;font-weight:700}
+@media(max-width:760px){.page{width:min(100% - 18px,1120px);padding-top:12px}.topbar{padding-bottom:16px}.brand-name{font-size:18px}.brand-sub{font-size:11px}.online{display:none}.hero{padding:28px 8px 22px}.hero h1{font-size:34px;letter-spacing:-1.2px}.hero p{font-size:14px}.frame{border-radius:18px}.player-wrap{padding:9px}.poster{min-height:210px;border-radius:13px}.action-panel{padding:3px 12px 14px}.primary-actions{gap:9px}.btn{min-height:67px;font-size:15px;padding:11px}.secondary-actions{gap:8px}.players{grid-template-columns:repeat(2,1fr)}.info{margin:0 12px 14px}.info-row{grid-template-columns:110px 1fr;padding:14px 14px;font-size:13px}.features{grid-template-columns:repeat(2,1fr);gap:8px;margin:12px}.feature{padding:13px}.feature-icon{margin-bottom:8px}.feature strong{font-size:12px}.feature span{font-size:10px}}
+@media(max-width:430px){.top-btn{display:none}.logo-mark{width:38px;height:38px}.brand-name{font-size:17px}.hero h1{font-size:30px}.poster-icon{width:68px;height:68px;font-size:26px}.primary-actions{grid-template-columns:1fr}.secondary-actions{display:grid;grid-template-columns:1fr 1fr}.info-row{grid-template-columns:1fr;gap:5px}.info-value{text-align:left;white-space:normal;word-break:break-word}.features{grid-template-columns:1fr 1fr}}
 """
-
 
 # ============================================================
 # HOME
@@ -2200,7 +1930,6 @@ function pairDevice() {{
     response_class=HTMLResponse
 )
 async def watch(token):
-
     row = get_file(token)
 
     if not row:
@@ -2219,7 +1948,7 @@ async def watch(token):
     )
 
     file_size = int(row["size"])
-    mime = resolve_media_mime(filename, row["mime"])
+    mime = row["mime"] or get_mime(filename)
     profile = detect_media_profile(filename, mime)
     browser_ok = profile["browser_ok"]
     profile_label = html.escape(profile["label"])
@@ -2238,17 +1967,27 @@ async def watch(token):
     stream_no_scheme = stream_url.replace("https://", "").replace("http://", "")
     scheme = "https" if stream_url.startswith("https://") else "http"
 
+    # Give the watch page a share destination as well. Existing share tokens are reused.
+    try:
+        share_token = row.get("share_token") if hasattr(row, "get") else None
+        if not share_token:
+            share_token = create_share_token(token)
+        share_url = f"{PUBLIC_URL}/share/{share_token}"
+    except Exception:
+        share_url = stream_url
+
     browser_button = (
-        '<button class="btn" id="browserBtn" onclick="stream()">▶ Browser Stream</button>'
+        '<button class="btn stream-btn" id="browserBtn" onclick="stream()">▶ Stream Now<small>Watch directly in browser</small></button>'
         if browser_ok
-        else '<button class="btn disabled" type="button" disabled>⚠ Browser Video Not Recommended</button>'
+        else '<button class="btn stream-btn disabled" type="button" disabled>⚠ Browser Stream<small>Use an external player for this codec</small></button>'
     )
 
     initial_media = (
         f"""<div class="poster-content">
             <div class="poster-icon">▶</div>
-            <div class="poster-title">Browser-ready media</div>
-            <div class="poster-sub">Tap Browser Stream to start</div>
+            <div class="poster-title">Ready to stream</div>
+            <div class="poster-sub">Tap Stream Now to start playback directly from Telegram.</div>
+            <div class="poster-codec">{detected_ext} · {detected_mime}</div>
         </div>"""
         if browser_ok else
         f"""<div class="poster-content">
@@ -2264,351 +2003,105 @@ async def watch(token):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#05070d">
 <title>STADY-PROXY | {safe_name}</title>
 <style>
 {STADY_CSS}
-
-/* Final clean player */
-.poster {{
-    position:relative;
-    overflow:hidden;
-    background:#02050a;
-}}
-.poster-content {{
-    position:absolute;
-    inset:0;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    text-align:center;
-    padding:24px;
-    box-sizing:border-box;
-    background:radial-gradient(circle at center, rgba(0,234,255,.10), transparent 58%);
-}}
-.poster-icon {{
-    font-size:48px;
-    margin-bottom:12px;
-    filter:drop-shadow(0 0 12px rgba(0,234,255,.8));
-}}
-.poster-title {{font-size:19px;font-weight:800;color:#fff}}
-.poster-sub {{margin-top:8px;font-size:13px;color:#a9bfd0;max-width:390px;line-height:1.5}}
-.poster-codec {{
-    margin-top:12px;
-    padding:7px 11px;
-    border:1px solid rgba(105,247,255,.35);
-    border-radius:999px;
-    font-size:12px;
-    color:#69f7ff;
-    background:rgba(0,0,0,.28);
-}}
-.profile-badge {{
-    display:inline-flex;
-    align-items:center;
-    gap:7px;
-    margin-top:12px;
-    padding:7px 11px;
-    border-radius:999px;
-    font-size:12px;
-    font-weight:700;
-    color:#fff;
-    background:rgba(0,0,0,.32);
-    border:1px solid rgba(255,255,255,.16);
-}}
-.disabled {{opacity:.48;cursor:not-allowed}}
-.video-shell {{position:relative;width:100%;height:100%;background:#000;border-radius:18px;overflow:hidden}}
-.video-shell video {{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}}
-.video-controls {{
-    position:absolute;left:10px;right:10px;bottom:10px;z-index:10;
-    padding:8px 10px 7px;border-radius:13px;
-    background:linear-gradient(180deg,transparent,rgba(0,0,0,.88) 34%);
-    box-sizing:border-box;
-    opacity:1;transition:opacity .2s;
-}}
-.video-controls.hide {{opacity:0;pointer-events:none}}
-.video-seek {{width:100%;height:5px;margin:0 0 6px;accent-color:#69f7ff;cursor:pointer}}
-.control-row {{display:flex;align-items:center;gap:8px;color:#fff}}
-.control-row button {{border:0;background:transparent;color:#fff;font-size:20px;padding:3px 7px;cursor:pointer}}
-.video-time {{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}}
-.control-spacer {{flex:1}}
-.video-error {{
-    display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:min(88%,420px);box-sizing:border-box;padding:16px;border-radius:14px;
-    background:rgba(0,0,0,.9);color:#fff;text-align:center;font-size:14px;line-height:1.5;z-index:12;
-}}
 </style>
 </head>
 <body>
 <main class="page">
-<div class="brand">STADY-PROXY</div>
-<section class="frame">
 
-<div class="poster" id="playerArea">
-    {initial_media}
-</div>
-
-<div style="text-align:center">
-    <span class="profile-badge">● {profile_label}</span>
-</div>
-
-<div class="actions">
-    {browser_button}
-    <button class="btn" onclick="togglePlayers()">🎬 External Players</button>
-    <a class="btn" href="{stream_url}&action=download" download style="text-decoration:none;text-align:center;display:block;">⬇ Download</a>
-
-    <div class="players" id="players">
-        <button onclick="openPlayer('mx')">MX Player</button>
-        <button onclick="openPlayer('vlc')">VLC Mobile</button>
-        <button onclick="openPlayer('playit')">PlayIt</button>
-        <button onclick="openPlayer('kmplayer')">KMPlayer</button>
-        <button onclick="openPlayer('nplayer')">nPlayer</button>
+<header class="topbar">
+    <div class="brand-wrap">
+        <div class="logo-mark">▶</div>
+        <div>
+            <div class="brand-name">STADY-<span>PROXY</span></div>
+            <div class="brand-sub">Telegram Direct Proxy</div>
+        </div>
     </div>
-</div>
+    <div class="top-actions">
+        <div class="online"><i></i> SERVER ONLINE</div>
+        <a class="top-btn" href="{share_url}" target="_blank" rel="noopener">⌘&nbsp; Share Link</a>
+        <button class="menu-btn" type="button" onclick="window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}})">⋮</button>
+    </div>
+</header>
 
-<div class="info">
-<div>📄 <b>File Name:</b> <span>{safe_name}</span></div>
-<div>☰ <b>File Size:</b> <span>{size_str}</span></div>
-<div>🎞 <b>Detected:</b> <span>{detected_ext} · {detected_mime}</span></div>
-<div>👤 <b>File Owner:</b> <span>STADY-PROXY</span></div>
-<div>◷ <b>Created Time:</b> <span>{created}</span></div>
-</div>
-
+<section class="hero">
+    <h1>Stream. Download. Enjoy.</h1>
+    <p>High-speed streaming directly from Telegram</p>
 </section>
 
-<div class="status" id="status">STADY-PROXY • READY</div>
+<section class="frame">
+    <div class="player-wrap">
+        <div class="poster" id="playerArea">
+            {initial_media}
+        </div>
+    </div>
 
-<div style="text-align:center;margin-top:22px;padding-bottom:8px;font-size:14px;color:#888;">
-Made with ♥ by
-<a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px;color:#ff2bd6;text-decoration:none;font-weight:700;text-shadow:0 0 5px rgba(255,43,214,.8),0 0 12px rgba(255,43,214,.55);">aswadh_kr</a>
+    <div class="profile-row">
+        <span class="profile-badge">● {profile_label}</span>
+    </div>
+
+    <div class="action-panel">
+        <div class="primary-actions">
+            {browser_button}
+            <a class="btn download-btn" href="{stream_url}&action=download" download style="text-align:center;display:block;">⇩ Download File<small>High-speed direct download</small></a>
+        </div>
+        <div class="secondary-actions">
+            <button class="btn" type="button" onclick="togglePlayers()">🎬 External Players</button>
+            <button class="btn" type="button" onclick="copyShareLink()">⛓ Copy Share Link</button>
+        </div>
+        <div class="players" id="players">
+            <button type="button" onclick="openPlayer('mx')">MX Player</button>
+            <button type="button" onclick="openPlayer('vlc')">VLC Mobile</button>
+            <button type="button" onclick="openPlayer('playit')">PlayIt</button>
+            <button type="button" onclick="openPlayer('kmplayer')">KMPlayer</button>
+            <button type="button" onclick="openPlayer('nplayer')">nPlayer</button>
+        </div>
+    </div>
+
+    <div class="info">
+        <div class="info-head"><span class="ico">▣</span> File Information</div>
+        <div class="info-row"><div class="info-label">File Name</div><div class="info-value">{safe_name}</div></div>
+        <div class="info-row"><div class="info-label">File Size</div><div class="info-value">{size_str}</div></div>
+        <div class="info-row"><div class="info-label">File Owner</div><div class="info-value verified">STADY-PROXY ✓</div></div>
+        <div class="info-row"><div class="info-label">Created Time</div><div class="info-value">{created}</div></div>
+    </div>
+</section>
+
+<div class="features">
+    <div class="feature"><div class="feature-icon">ϟ</div><strong>Blazing Fast</strong><span>Optimized streaming delivery</span></div>
+    <div class="feature"><div class="feature-icon">◈</div><strong>Secure Link</strong><span>Temporary access URL</span></div>
+    <div class="feature"><div class="feature-icon">☁</div><strong>No Storage</strong><span>Stream directly from Telegram</span></div>
+    <div class="feature"><div class="feature-icon">▣</div><strong>Any Device</strong><span>Mobile · TV · PC</span></div>
 </div>
+
+<div class="status" id="status">STADY-PROXY • READY</div>
+<div class="footer"><span class="brand-footer">STADY-PROXY</span> · Your Premium Telegram Streaming Gateway<br><br>❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer">@aswadh_kr</a></div>
+
 </main>
 
 <script>
 const STREAM_URL = {stream_url!r};
+const SHARE_URL = {share_url!r};
 const BROWSER_OK = {str(browser_ok).lower()};
-const BROWSER_MKV = {str(detected_ext.lower() == ".mkv").lower()};
 
 function setStatus(text) {{
     const el = document.getElementById("status");
     if (el) el.textContent = text;
 }}
 
-async function streamMkv() {{
-    const area = document.getElementById("playerArea");
-    if (!area) return;
-
-    area.innerHTML = `
-        <div class="video-shell" id="videoShell">
-            <canvas id="mkvCanvas" style="width:100%;height:100%;display:block;background:#000"></canvas>
-            <div id="videoError" class="video-error"></div>
-            <div class="video-controls" id="videoControls">
-                <input id="videoSeek" class="video-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
-                <div class="control-row">
-                    <button id="videoPlay" type="button" aria-label="Play or pause">▶</button>
-                    <span id="videoTime" class="video-time">0:00 / 0:00</span>
-                    <span class="control-spacer"></span>
-                    <button id="videoMute" type="button" aria-label="Mute">🔊</button>
-                    <button id="videoFullscreen" type="button" aria-label="Fullscreen">⛶</button>
-                </div>
-            </div>
-        </div>`;
-
-    const canvas = document.getElementById("mkvCanvas");
-    const ctx = canvas.getContext("2d", {{ alpha: false }});
-    const seek = document.getElementById("videoSeek");
-    const playBtn = document.getElementById("videoPlay");
-    const muteBtn = document.getElementById("videoMute");
-    const fullscreenBtn = document.getElementById("videoFullscreen");
-    const timeLabel = document.getElementById("videoTime");
-    const controls = document.getElementById("videoControls");
-    const shell = document.getElementById("videoShell");
-    const errorBox = document.getElementById("videoError");
-    let hideTimer = null;
-    let running = false;
-    let position = 0;
-    let duration = 0;
-    let raf = 0;
-    let generation = 0;
-    let audioContext = null;
-    let audioGain = null;
-    let audioNodes = [];
-    let videoTask = null;
-    let audioTask = null;
-    let mediabunny = null;
-    let input = null;
-    let videoTrack = null;
-    let audioTrack = null;
-    let videoSink = null;
-    let audioSink = null;
-
-    function formatTime(s) {{
-        if (!Number.isFinite(s) || s < 0) return "0:00";
-        s = Math.floor(s);
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        const sec = s % 60;
-        return h ? `${{h}}:${{String(m).padStart(2,"0")}}:${{String(sec).padStart(2,"0")}}` : `${{m}}:${{String(sec).padStart(2,"0")}}`;
+async function copyShareLink() {{
+    try {{
+        await navigator.clipboard.writeText(SHARE_URL);
+        setStatus("STADY-PROXY • SHARE LINK COPIED ✓");
+    }} catch (_) {{
+        window.prompt("Copy this share link:", SHARE_URL);
     }}
-
-    function updateUI() {{
-        seek.value = duration ? String(Math.max(0, Math.min(1000, position / duration * 1000))) : "0";
-        timeLabel.textContent = `${{formatTime(position)}} / ${{formatTime(duration)}}`;
-        playBtn.textContent = running ? "❚❚" : "▶";
-        muteBtn.textContent = audioGain && audioGain.gain.value === 0 ? "🔇" : "🔊";
-    }}
-
-    function showControls() {{
-        controls.classList.add("show");
-        clearTimeout(hideTimer);
-        if (running) hideTimer = setTimeout(() => controls.classList.remove("show"), 2500);
-    }}
-
-    function stopAudio() {{
-        for (const node of audioNodes) {{
-            try {{ node.stop(); }} catch (_) {{}}
-            try {{ node.disconnect(); }} catch (_) {{}}
-        }}
-        audioNodes = [];
-    }}
-
-    async function stopPlayback() {{
-        running = false;
-        generation++;
-        if (raf) cancelAnimationFrame(raf);
-        stopAudio();
-        if (videoTask) {{ try {{ await videoTask; }} catch (_) {{}} }}
-        if (audioTask) {{ try {{ await audioTask; }} catch (_) {{}} }}
-        videoTask = null;
-        audioTask = null;
-        updateUI();
-    }}
-
-    async function ensureInput() {{
-        if (input) return;
-        setStatus("STADY-PROXY • LOADING MKV PLAYER…");
-        mediabunny = await import("https://cdn.jsdelivr.net/npm/mediabunny/+esm");
-        input = new mediabunny.Input({{
-            source: new mediabunny.UrlSource(STREAM_URL),
-            formats: mediabunny.ALL_FORMATS
-        }});
-        if (!(await input.canRead())) throw new Error("This MKV could not be read by the browser player.");
-        videoTrack = await input.getPrimaryVideoTrack();
-        audioTrack = await input.getPrimaryAudioTrack();
-        if (!videoTrack) throw new Error("No video track was found in this MKV.");
-        duration = await input.computeDuration();
-        videoSink = new mediabunny.CanvasSink(videoTrack, {{ poolSize: 2 }});
-        if (audioTrack) audioSink = new mediabunny.AudioBufferSink(audioTrack);
-        updateUI();
-    }}
-
-    async function renderVideo(myGeneration, startAt) {{
-        let firstWall = performance.now();
-        let firstTs = null;
-        try {{
-            for await (const frame of videoSink.canvases(startAt, Math.min(duration, startAt + 30))) {{
-                if (!running || myGeneration !== generation) return;
-                if (firstTs === null) {{ firstTs = frame.timestamp; firstWall = performance.now(); }}
-                const target = firstWall + (frame.timestamp - firstTs) * 1000;
-                const wait = target - performance.now();
-                if (wait > 2) await new Promise(r => setTimeout(r, Math.min(wait, 100)));
-                if (!running || myGeneration !== generation) return;
-                const c = frame.canvas;
-                if (canvas.width !== c.width || canvas.height !== c.height) {{ canvas.width = c.width; canvas.height = c.height; }}
-                ctx.drawImage(c, 0, 0, canvas.width, canvas.height);
-                position = frame.timestamp;
-                updateUI();
-                if (position >= duration - 0.05) {{ running = false; updateUI(); setStatus("STADY-PROXY • ENDED"); return; }}
-            }}
-        }} finally {{
-            if (videoSink) {{}}
-        }}
-    }}
-
-    async function renderAudio(myGeneration, startAt) {{
-        if (!audioSink || !audioContext) return;
-        const base = audioContext.currentTime + 0.08;
-        try {{
-            for await (const item of audioSink.buffers(startAt, Math.min(duration, startAt + 30))) {{
-                if (!running || myGeneration !== generation) return;
-                const node = audioContext.createBufferSource();
-                node.buffer = item.buffer;
-                node.connect(audioGain);
-                const when = Math.max(audioContext.currentTime + 0.02, base + (item.timestamp - startAt));
-                node.start(when);
-                audioNodes.push(node);
-            }}
-        }} catch (e) {{
-            console.warn("MKV audio playback error:", e);
-        }}
-    }}
-
-    async function playMkv() {{
-        try {{
-            await ensureInput();
-            if (!audioContext) {{
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                audioGain = audioContext.createGain();
-                audioGain.connect(audioContext.destination);
-            }}
-            await audioContext.resume();
-            if (running) return;
-            running = true;
-            generation++;
-            const myGeneration = generation;
-            setStatus("STADY-PROXY • MKV PLAYING ▶");
-            showControls();
-            videoTask = renderVideo(myGeneration, position);
-            audioTask = renderAudio(myGeneration, position);
-            await Promise.race([videoTask, audioTask]);
-            if (running && myGeneration === generation && position < duration - 0.1) {{
-                running = false;
-                updateUI();
-            }}
-        }} catch (e) {{
-            console.error(e);
-            running = false;
-            errorBox.innerHTML = "⚠️ <b>Browser MKV playback failed</b><br><span style=\"opacity:.8\">" + String(e.message || e).replace(/[<>&]/g, "") + "</span><br><br>Try VLC / MX Player if this device does not support the video's codec.";
-            errorBox.style.display = "block";
-            setStatus("STADY-PROXY • MKV PLAYER ERROR");
-            updateUI();
-        }}
-    }}
-
-    playBtn.onclick = () => running ? stopPlayback() : playMkv();
-    muteBtn.onclick = () => {{
-        if (!audioGain) return;
-        audioGain.gain.value = audioGain.gain.value === 0 ? 1 : 0;
-        updateUI();
-    }};
-    fullscreenBtn.onclick = () => {{
-        if (shell.requestFullscreen) shell.requestFullscreen().catch(() => {{}});
-    }};
-    seek.oninput = async () => {{
-        const target = duration ? Number(seek.value) / 1000 * duration : 0;
-        position = Math.max(0, Math.min(duration || 0, target));
-        updateUI();
-        const wasRunning = running;
-        await stopPlayback();
-        if (wasRunning) await playMkv();
-    }};
-    shell.onclick = (e) => {{
-        if (e.target.closest(".video-controls")) return;
-        if (running) stopPlayback(); else playMkv();
-        showControls();
-    }};
-    shell.addEventListener("mousemove", showControls);
-    shell.addEventListener("touchstart", showControls, {{passive:true}});
-    showControls();
-    updateUI();
-    setStatus("STADY-PROXY • MKV READY — TAP ▶");
 }}
 
 function stream() {{
-    if (BROWSER_MKV) {{
-        streamMkv();
-        return;
-    }}
-
     if (!BROWSER_OK) {{
         setStatus("STADY-PROXY • USE VLC / MX PLAYER");
         togglePlayers(true);
@@ -2717,8 +2210,8 @@ function stream() {{
 function togglePlayers(forceOpen=false) {{
     const players = document.getElementById("players");
     if (!players) return;
-    if (forceOpen) players.style.display = "block";
-    else players.style.display = players.style.display === "block" ? "none" : "block";
+    if (forceOpen) players.style.display = "grid";
+    else players.style.display = players.style.display === "grid" ? "none" : "grid";
 }}
 
 function openPlayer(player) {{
@@ -3074,7 +2567,7 @@ async def direct_proxy(
 
     file_size = int(row["size"])
 
-    mime = resolve_media_mime(real_filename, row["mime"])
+    mime = row["mime"] or get_mime(real_filename) or "application/octet-stream"
 
     range_header = request.headers.get(
         "range"
