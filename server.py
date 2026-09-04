@@ -777,9 +777,46 @@ def clean_filename(name):
 
 def get_mime(filename):
 
+    # Telegram can occasionally store a generic/incorrect MIME type
+    # (for example application/zip) for a real media file.  Prefer the
+    # filename extension for common media containers so browsers receive
+    # the correct Content-Type.
+    ext = Path(filename or "").suffix.lower()
+    media_mimes = {
+        ".mp4": "video/mp4",
+        ".m4v": "video/mp4",
+        ".webm": "video/webm",
+        ".ogv": "video/ogg",
+        ".ogg": "audio/ogg",
+        ".mkv": "video/x-matroska",
+        ".mov": "video/quicktime",
+        ".avi": "video/x-msvideo",
+        ".ts": "video/mp2t",
+        ".m2ts": "video/mp2t",
+        ".mts": "video/mp2t",
+        ".flv": "video/x-flv",
+        ".wmv": "video/x-ms-wmv",
+    }
+    if ext in media_mimes:
+        return media_mimes[ext]
+
     mime, _ = mimetypes.guess_type(filename)
 
     return mime or "application/octet-stream"
+
+
+def resolve_media_mime(filename, stored_mime=None):
+    # For known media extensions, always use the canonical media MIME.
+    # This prevents a stale Telegram/DB value such as application/zip from
+    # breaking browser playback or the HTML5 media type detection.
+    ext = Path(filename or "").suffix.lower()
+    canonical = get_mime(filename)
+    if ext in {
+        ".mp4", ".m4v", ".webm", ".ogv", ".ogg", ".mkv",
+        ".mov", ".avi", ".ts", ".m2ts", ".mts", ".flv", ".wmv"
+    }:
+        return canonical
+    return (stored_mime or canonical or "application/octet-stream").lower()
 
 
 def detect_media_profile(filename, mime=None):
@@ -804,10 +841,23 @@ def detect_media_profile(filename, mime=None):
     browser_containers = {".mp4", ".m4v", ".webm", ".ogv", ".ogg"}
     external_containers = {".mkv", ".avi", ".mov", ".ts", ".m2ts", ".mts", ".flv", ".wmv"}
 
+    # MKV is handled by the client-side browser player below.  The container
+    # itself is not handed to the native <video> element; Mediabunny reads the
+    # Matroska stream over HTTP Range requests and decodes supported codecs via
+    # WebCodecs.  Codec support is still device/browser dependent.
+    if ext == ".mkv":
+        return {
+            "browser_ok": True,
+            "reason": "MKV Browser Player (client-side demux/decode)",
+            "label": "Browser MKV Player",
+            "mime": mime,
+            "extension": ext,
+        }
+
     if has_incompatible_marker or ext in external_containers:
         return {
             "browser_ok": False,
-            "reason": "MKV/HEVC/10-bit or another browser-inconsistent format detected",
+            "reason": "HEVC/10-bit or another browser-inconsistent format detected",
             "label": "External Player Recommended",
             "mime": mime,
             "extension": ext or "unknown",
@@ -1791,93 +1841,252 @@ async def start_command(event):
 # ============================================================
 
 STADY_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Poppins:wght@400;500;600&display=swap');
 
 *{box-sizing:border-box}
-html,body{margin:0;min-height:100%;font-family:Inter,Arial,sans-serif;background:#05070d;color:#eef2ff}
-body{overflow-x:hidden;background:
-    radial-gradient(circle at 8% 5%,rgba(124,58,237,.12),transparent 30%),
-    radial-gradient(circle at 92% 20%,rgba(34,211,238,.08),transparent 28%),
-    #05070d}
-body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(rgba(148,163,184,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.06) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,transparent,#000 15%,#000 85%,transparent)}
 
-.page{width:min(980px,100%);margin:auto;padding:24px 18px 52px;position:relative;z-index:1}
-
-.brand{font-family:'Space Grotesk',Inter,sans-serif;font-size:clamp(24px,5vw,32px);font-weight:700;letter-spacing:-.8px;margin:0 0 26px;color:#f8fafc;display:flex;align-items:center;gap:10px}
-.brand:before{content:"";width:11px;height:28px;border-radius:5px;background:linear-gradient(180deg,#8b5cf6,#22d3ee);box-shadow:0 0 22px rgba(124,58,237,.55)}
-
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:28px}
-.topbar-left{min-width:0}
-.brand-sub{margin-top:4px;color:#7f8aa3;font-size:12px;letter-spacing:.04em}
-.online{display:inline-flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid rgba(74,222,128,.16);border-radius:999px;background:rgba(34,197,94,.06);color:#86efac;font-size:12px;font-weight:600;white-space:nowrap}
-.online i{width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 10px #4ade80;animation:pulse 2s infinite}
-
-.frame{position:relative;padding:0;border:1px solid rgba(148,163,184,.13);border-radius:24px;background:rgba(10,14,24,.72);box-shadow:0 24px 70px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden;backdrop-filter:blur(18px)}
-.frame:before,.frame:after{display:none}
-
-.watch-hero{padding:28px 28px 0}
-.eyebrow{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#8b5cf6;margin-bottom:9px}
-.watch-title{margin:0;color:#f8fafc;font-family:'Space Grotesk',Inter,sans-serif;font-size:clamp(23px,4vw,36px);line-height:1.15;font-weight:700;letter-spacing:-1px;word-break:break-word}
-.watch-sub{margin:9px 0 22px;color:#7f8aa3;font-size:13px}
-
-.poster{position:relative;overflow:hidden;aspect-ratio:16/9;background:#070a12;border:1px solid rgba(148,163,184,.15);border-radius:18px;box-shadow:0 18px 45px rgba(0,0,0,.3);isolation:isolate}
-.poster:before{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 42%,rgba(124,58,237,.22),transparent 30%),radial-gradient(circle at 72% 30%,rgba(34,211,238,.12),transparent 28%),linear-gradient(135deg,#090c16,#0a1020 50%,#070a12);z-index:-2}
-.poster:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(2,6,23,.82));pointer-events:none;z-index:2}
-.poster-content{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;z-index:3}
-.poster-icon{width:82px;height:82px;border-radius:50%;display:grid;place-items:center;font-size:27px;color:#fff;background:linear-gradient(145deg,rgba(124,58,237,.95),rgba(37,99,235,.85));border:1px solid rgba(255,255,255,.18);box-shadow:0 0 0 9px rgba(124,58,237,.08),0 0 45px rgba(34,211,238,.18);margin-bottom:18px}
-.poster-title{font-size:18px;font-weight:700;color:#fff}
-.poster-sub{margin-top:7px;font-size:13px;color:#94a3b8;max-width:420px;line-height:1.5}
-.poster-codec{margin-top:12px;padding:7px 11px;border:1px solid rgba(148,163,184,.18);border-radius:999px;font-size:11px;color:#a5b4fc;background:rgba(15,23,42,.7)}
-.profile-badge{display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:7px 11px;border:1px solid rgba(148,163,184,.13);border-radius:999px;background:rgba(15,23,42,.65);color:#aab5ca;font-size:11px;font-weight:600}
-.profile-badge:before{content:"";width:6px;height:6px;border-radius:50%;background:#22d3ee;box-shadow:0 0 8px rgba(34,211,238,.8)}
-
-.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:22px 28px 26px;margin:0}
-.btn{appearance:none;border:1px solid rgba(148,163,184,.16);border-radius:14px;padding:15px 16px;width:100%;min-height:54px;font:600 14px Inter,sans-serif;color:#eef2ff;cursor:pointer;background:linear-gradient(180deg,rgba(17,24,39,.92),rgba(10,14,24,.95));box-shadow:inset 0 1px 0 rgba(255,255,255,.035);transition:transform .18s,border-color .18s,box-shadow .18s,background .18s;text-decoration:none}
-.btn:hover{transform:translateY(-2px);border-color:rgba(139,92,246,.55);box-shadow:0 12px 28px rgba(0,0,0,.25),0 0 24px rgba(124,58,237,.10)}
-.btn:active{transform:translateY(0)}
-.actions>.btn:first-child{border-color:rgba(139,92,246,.5);background:linear-gradient(135deg,rgba(91,33,182,.32),rgba(17,24,39,.92));box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 0 25px rgba(124,58,237,.08)}
-.actions>.btn:nth-child(3){border-color:rgba(34,211,238,.34)}
-
-.players{display:none;grid-column:1/-1;border:1px solid rgba(148,163,184,.12);border-radius:14px;background:#090d16;margin-top:-2px;padding:8px;box-shadow:0 10px 28px rgba(0,0,0,.28);font-size:13px}
-.players button{display:block;width:100%;border:0;border-radius:9px;background:transparent;color:#cbd5e1;font:600 13px Inter,sans-serif;padding:11px;cursor:pointer;text-align:left}
-.players button:hover{background:rgba(124,58,237,.1);color:#e9d5ff}
-
-.info{margin:0 28px 26px;padding:0;border:1px solid rgba(148,163,184,.12);border-radius:16px;overflow:hidden;background:rgba(8,12,20,.68);font-size:13px;color:#cbd5e1}
-.info-head{padding:13px 15px;border-bottom:1px solid rgba(148,163,184,.1);font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:#94a3b8;font-weight:700}
-.info div:not(.info-head){display:flex;align-items:center;justify-content:space-between;gap:20px;padding:13px 15px;border-bottom:1px solid rgba(148,163,184,.07)}
-.info div:last-child{border-bottom:0}
-.info b{font-weight:500;color:#7f8aa3;flex:0 0 auto}
-.info span{color:#e2e8f0;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-.feature-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 28px 28px}
-.feature{padding:15px;border:1px solid rgba(148,163,184,.11);border-radius:14px;background:rgba(8,12,20,.55)}
-.feature-icon{font-size:17px;margin-bottom:10px}
-.feature-title{font-size:12px;font-weight:700;color:#e2e8f0}
-.feature-sub{margin-top:4px;font-size:10px;line-height:1.45;color:#64748b}
-
-.status{font-size:11px;color:#64748b;text-align:center;margin:16px 0 0;letter-spacing:.04em}
-.footer{text-align:center;margin-top:22px;color:#475569;font-size:11px}.footer a{color:#a78bfa;text-decoration:none;font-weight:700}
-
-.disabled{opacity:.45;cursor:not-allowed!important}
-.video-shell{position:relative;width:100%;height:100%;background:#000;border-radius:18px;overflow:hidden;z-index:3}
-.video-shell video{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}
-.video-controls{position:absolute;left:12px;right:12px;bottom:12px;z-index:10;padding:12px;border-radius:13px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.9) 35%);box-sizing:border-box;opacity:1;transition:opacity .2s}
-.video-controls.hide{opacity:0;pointer-events:none}
-.video-seek{width:100%;height:4px;margin:0 0 7px;accent-color:#8b5cf6;cursor:pointer}
-.control-row{display:flex;align-items:center;gap:7px;color:#fff}.control-row button{border:0;background:transparent;color:#fff;font-size:18px;padding:3px 7px;cursor:pointer}.video-time{font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}.control-spacer{flex:1}
-.video-error{display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(88%,420px);box-sizing:border-box;padding:16px;border-radius:14px;background:rgba(3,7,18,.94);border:1px solid rgba(248,113,113,.2);color:#fff;text-align:center;font-size:13px;line-height:1.5;z-index:12}
-
-.home-card{padding:28px}.home-card .poster{margin-bottom:20px}
-.pair-input{width:100%;text-align:center;letter-spacing:.2em}
-.small{color:#7f8aa3;font-size:12px;line-height:1.6}
-.sharebox,.receiver{text-align:center;padding:28px}.qr{width:min(310px,80vw);height:auto;background:#fff;padding:12px;border-radius:14px;margin:14px auto;display:block}
-
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.8)}}
-
-@media(max-width:700px){
-    .page{padding:16px 10px 38px}.topbar{margin-bottom:20px}.watch-hero{padding:22px 16px 0}.actions{grid-template-columns:1fr;padding:18px 16px 20px}.info{margin:0 16px 20px}.feature-grid{grid-template-columns:repeat(2,minmax(0,1fr));margin:0 16px 22px}.brand{margin-bottom:18px}.online{font-size:10px;padding:8px 10px}.watch-title{font-size:25px}.poster-icon{width:68px;height:68px;font-size:23px}.poster-title{font-size:16px}
+html,body{
+    margin:0;
+    min-height:100%;
+    font-family:Poppins,Arial,sans-serif;
+    background:#030914;
+    color:#eaf7ff;
 }
-@media(max-width:430px){.topbar{align-items:flex-start}.online{margin-top:2px}.info div:not(.info-head){align-items:flex-start}.info span{white-space:normal;text-align:right;word-break:break-word}.feature-grid{gap:8px}.feature{padding:13px}.feature-sub{font-size:9px}}
+
+body{
+    overflow-x:hidden;
+    background:
+        radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
+        radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
+        linear-gradient(180deg,#020812,#061629 55%,#020812);
+}
+
+body:before{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    opacity:.32;
+    background-image:
+        linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
+    background-size:34px 34px;
+    mask-image:linear-gradient(
+        to bottom,
+        transparent,
+        #000 12%,
+        #000 85%,
+        transparent
+    );
+}
+
+.page{
+    width:min(720px,100%);
+    margin:auto;
+    padding:22px 14px 45px;
+}
+
+.brand{
+    text-align:center;
+    font-family:Orbitron,sans-serif;
+    font-size:clamp(28px,7vw,46px);
+    font-weight:800;
+    letter-spacing:2px;
+    margin:8px 0 20px;
+    color:#69f7ff;
+    text-shadow:
+        0 0 8px #00eaff,
+        0 0 22px #7c28ff,
+        0 0 40px #ff18d5;
+}
+
+.frame{
+    position:relative;
+    padding:12px;
+    border:2px solid #42eaff;
+    border-radius:15px;
+    background:
+        linear-gradient(
+            145deg,
+            rgba(12,43,72,.9),
+            rgba(4,13,28,.94)
+        );
+    box-shadow:
+        0 0 10px #00eaff,
+        inset 0 0 20px rgba(0,234,255,.15),
+        0 0 30px rgba(255,0,213,.2);
+}
+
+.frame:before,
+.frame:after{
+    content:"";
+    position:absolute;
+    height:5px;
+    width:90px;
+    top:-5px;
+    background:linear-gradient(
+        90deg,
+        #00eaff,
+        #bdfcff,
+        #ff24d7
+    );
+    box-shadow:0 0 12px #00eaff;
+    border-radius:4px;
+}
+
+.frame:before{left:35px}
+.frame:after{right:35px}
+
+.poster{
+    position:relative;
+    overflow:hidden;
+    border:2px solid #36f3ff;
+    border-radius:8px;
+    aspect-ratio:16/9;
+    background:#0a2039;
+    box-shadow:
+        inset 0 0 22px rgba(0,255,255,.35),
+        0 0 14px rgba(0,234,255,.45);
+}
+
+.poster img{
+    width:100%;
+    height:100%;
+    display:block;
+    object-fit:cover;
+}
+
+.play{
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    width:118px;
+    height:82px;
+    border:2px solid #9afcff;
+    border-radius:16px;
+    background:rgba(75,90,112,.58);
+    backdrop-filter:blur(5px);
+    color:#dffcff;
+    font-size:44px;
+    line-height:78px;
+    text-align:center;
+    text-shadow:0 0 10px #00eaff;
+    box-shadow:0 0 18px rgba(0,238,255,.35);
+    cursor:pointer;
+}
+
+.actions{
+    display:grid;
+    gap:14px;
+    margin:18px 0;
+}
+
+.btn{
+    appearance:none;
+    border:2px solid #38f5ff;
+    border-radius:10px;
+    padding:15px 12px;
+    width:100%;
+    font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
+    color:#eaffff;
+    cursor:pointer;
+    background:
+        linear-gradient(
+            180deg,
+            rgba(17,72,103,.95),
+            rgba(10,33,62,.98)
+        );
+    box-shadow:
+        0 0 9px rgba(0,238,255,.75),
+        inset 0 0 16px rgba(0,238,255,.12),
+        0 5px 0 rgba(255,0,204,.35);
+    transition:.18s transform,.18s filter;
+}
+
+.btn:hover{
+    filter:brightness(1.25);
+    transform:translateY(-2px);
+}
+
+.btn:active{
+    transform:translateY(1px);
+}
+
+.players{
+    display:none;
+    border-radius:0 0 18px 18px;
+    background:#101b28;
+    margin-top:-14px;
+    padding:22px 12px 18px;
+    text-align:center;
+    box-shadow:0 8px 18px rgba(0,0,0,.35);
+    font-size:18px;
+}
+
+.players button{
+    display:block;
+    width:100%;
+    border:0;
+    background:none;
+    color:#f0f5ff;
+    font:inherit;
+    padding:8px;
+    cursor:pointer;
+}
+
+.players button:hover{
+    color:#56efff;
+}
+
+.info{
+    margin-top:14px;
+    padding:16px 4px 8px;
+    font-size:16px;
+    line-height:2;
+    color:#e7f4ff;
+}
+
+.info div{
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.info b{
+    font-weight:500;
+}
+
+.status{
+    font-size:13px;
+    color:#8edfff;
+    text-align:center;
+    margin-top:8px;
+    opacity:.8;
+}
+
+@media(max-width:480px){
+
+    .page{
+        padding-left:9px;
+        padding-right:9px;
+    }
+
+    .frame{
+        padding:9px;
+    }
+
+    .play{
+        width:95px;
+        height:68px;
+        line-height:64px;
+        font-size:34px;
+    }
+
+    .info{
+        font-size:14px;
+    }
+}
 """
 
 
@@ -1993,6 +2202,7 @@ function pairDevice() {{
 async def watch(token):
 
     row = get_file(token)
+
     if not row:
         return HTMLResponse(
             content=stady_error_page(),
@@ -2009,7 +2219,7 @@ async def watch(token):
     )
 
     file_size = int(row["size"])
-    mime = row["mime"] or get_mime(filename)
+    mime = resolve_media_mime(filename, row["mime"])
     profile = detect_media_profile(filename, mime)
     browser_ok = profile["browser_ok"]
     profile_label = html.escape(profile["label"])
@@ -2028,28 +2238,22 @@ async def watch(token):
     stream_no_scheme = stream_url.replace("https://", "").replace("http://", "")
     scheme = "https" if stream_url.startswith("https://") else "http"
 
-    share_token = row.get("share_token")
-    if not share_token:
-        share_token = create_share_token(token)
-    share_url = f"{PUBLIC_URL}/share/{share_token}"
-
     browser_button = (
-        '<button class="btn" id="browserBtn" onclick="stream()">▶&nbsp; Stream in Browser</button>'
-        if browser_ok else
-        '<button class="btn disabled" type="button" disabled>⚠&nbsp; Browser Playback Not Recommended</button>'
+        '<button class="btn" id="browserBtn" onclick="stream()">▶ Browser Stream</button>'
+        if browser_ok
+        else '<button class="btn disabled" type="button" disabled>⚠ Browser Video Not Recommended</button>'
     )
 
     initial_media = (
         f"""<div class="poster-content">
             <div class="poster-icon">▶</div>
-            <div class="poster-title">Ready to stream</div>
-            <div class="poster-sub">Start playback in your browser or choose an external player.</div>
-            <div class="poster-codec">{profile_label}</div>
+            <div class="poster-title">Browser-ready media</div>
+            <div class="poster-sub">Tap Browser Stream to start</div>
         </div>"""
         if browser_ok else
         f"""<div class="poster-content">
             <div class="poster-icon">🎬</div>
-            <div class="poster-title">External player recommended</div>
+            <div class="poster-title">External Player Recommended</div>
             <div class="poster-sub">{profile_reason}</div>
             <div class="poster-codec">{detected_ext} · {detected_mime}</div>
         </div>"""
@@ -2060,85 +2264,353 @@ async def watch(token):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#05070d">
 <title>STADY-PROXY | {safe_name}</title>
 <style>
 {STADY_CSS}
+
+/* Final clean player */
+.poster {{
+    position:relative;
+    overflow:hidden;
+    background:#02050a;
+}}
+.poster-content {{
+    position:absolute;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    padding:24px;
+    box-sizing:border-box;
+    background:radial-gradient(circle at center, rgba(0,234,255,.10), transparent 58%);
+}}
+.poster-icon {{
+    font-size:48px;
+    margin-bottom:12px;
+    filter:drop-shadow(0 0 12px rgba(0,234,255,.8));
+}}
+.poster-title {{font-size:19px;font-weight:800;color:#fff}}
+.poster-sub {{margin-top:8px;font-size:13px;color:#a9bfd0;max-width:390px;line-height:1.5}}
+.poster-codec {{
+    margin-top:12px;
+    padding:7px 11px;
+    border:1px solid rgba(105,247,255,.35);
+    border-radius:999px;
+    font-size:12px;
+    color:#69f7ff;
+    background:rgba(0,0,0,.28);
+}}
+.profile-badge {{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    margin-top:12px;
+    padding:7px 11px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:700;
+    color:#fff;
+    background:rgba(0,0,0,.32);
+    border:1px solid rgba(255,255,255,.16);
+}}
+.disabled {{opacity:.48;cursor:not-allowed}}
+.video-shell {{position:relative;width:100%;height:100%;background:#000;border-radius:18px;overflow:hidden}}
+.video-shell video {{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}}
+.video-controls {{
+    position:absolute;left:10px;right:10px;bottom:10px;z-index:10;
+    padding:8px 10px 7px;border-radius:13px;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.88) 34%);
+    box-sizing:border-box;
+    opacity:1;transition:opacity .2s;
+}}
+.video-controls.hide {{opacity:0;pointer-events:none}}
+.video-seek {{width:100%;height:5px;margin:0 0 6px;accent-color:#69f7ff;cursor:pointer}}
+.control-row {{display:flex;align-items:center;gap:8px;color:#fff}}
+.control-row button {{border:0;background:transparent;color:#fff;font-size:20px;padding:3px 7px;cursor:pointer}}
+.video-time {{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}}
+.control-spacer {{flex:1}}
+.video-error {{
+    display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(88%,420px);box-sizing:border-box;padding:16px;border-radius:14px;
+    background:rgba(0,0,0,.9);color:#fff;text-align:center;font-size:14px;line-height:1.5;z-index:12;
+}}
 </style>
 </head>
 <body>
 <main class="page">
+<div class="brand">STADY-PROXY</div>
+<section class="frame">
 
-<div class="topbar">
-    <div class="topbar-left">
-        <div class="brand" style="margin:0">STADY-PROXY</div>
-        <div class="brand-sub">TELEGRAM DIRECT STREAMING GATEWAY</div>
-    </div>
-    <div class="online"><i></i> SERVER ONLINE</div>
+<div class="poster" id="playerArea">
+    {initial_media}
 </div>
 
-<section class="frame">
-    <div class="watch-hero">
-        <div class="eyebrow">NOW PLAYING</div>
-        <h1 class="watch-title">{safe_name}</h1>
-        <p class="watch-sub">Secure temporary link · {size_str} · {detected_ext}</p>
+<div style="text-align:center">
+    <span class="profile-badge">● {profile_label}</span>
+</div>
 
-        <div class="poster" id="playerArea">
-            {initial_media}
-        </div>
+<div class="actions">
+    {browser_button}
+    <button class="btn" onclick="togglePlayers()">🎬 External Players</button>
+    <a class="btn" href="{stream_url}&action=download" download style="text-decoration:none;text-align:center;display:block;">⬇ Download</a>
 
-        <div style="text-align:left">
-            <span class="profile-badge">{profile_label}</span>
-        </div>
+    <div class="players" id="players">
+        <button onclick="openPlayer('mx')">MX Player</button>
+        <button onclick="openPlayer('vlc')">VLC Mobile</button>
+        <button onclick="openPlayer('playit')">PlayIt</button>
+        <button onclick="openPlayer('kmplayer')">KMPlayer</button>
+        <button onclick="openPlayer('nplayer')">nPlayer</button>
     </div>
+</div>
 
-    <div class="actions">
-        {browser_button}
-        <button class="btn" onclick="togglePlayers()">🎬&nbsp; External Players</button>
-        <a class="btn" href="{stream_url}&action=download" download style="text-align:center;display:block;">↓&nbsp; Download File</a>
-        <a class="btn" href="{share_url}" style="text-align:center;display:block;">↗&nbsp; Share to Another Device</a>
+<div class="info">
+<div>📄 <b>File Name:</b> <span>{safe_name}</span></div>
+<div>☰ <b>File Size:</b> <span>{size_str}</span></div>
+<div>🎞 <b>Detected:</b> <span>{detected_ext} · {detected_mime}</span></div>
+<div>👤 <b>File Owner:</b> <span>STADY-PROXY</span></div>
+<div>◷ <b>Created Time:</b> <span>{created}</span></div>
+</div>
 
-        <div class="players" id="players">
-            <button onclick="openPlayer('mx')">MX Player</button>
-            <button onclick="openPlayer('vlc')">VLC Mobile</button>
-            <button onclick="openPlayer('playit')">PlayIt</button>
-            <button onclick="openPlayer('kmplayer')">KMPlayer</button>
-            <button onclick="openPlayer('nplayer')">nPlayer</button>
-        </div>
-    </div>
-
-    <div class="info">
-        <div class="info-head">File Information</div>
-        <div><b>File Name</b><span>{safe_name}</span></div>
-        <div><b>File Size</b><span>{size_str}</span></div>
-        <div><b>Format</b><span>{detected_ext} · {detected_mime}</span></div>
-        <div><b>File Owner</b><span>STADY-PROXY ✓</span></div>
-        <div><b>Created</b><span>{created}</span></div>
-    </div>
-
-    <div class="feature-grid">
-        <div class="feature"><div class="feature-icon">⚡</div><div class="feature-title">Fast Stream</div><div class="feature-sub">Optimized byte-range delivery</div></div>
-        <div class="feature"><div class="feature-icon">🔒</div><div class="feature-title">Temporary Link</div><div class="feature-sub">Automatic 12-hour expiry</div></div>
-        <div class="feature"><div class="feature-icon">☁</div><div class="feature-title">No Permanent Storage</div><div class="feature-sub">Stream directly through proxy</div></div>
-        <div class="feature"><div class="feature-icon">📱</div><div class="feature-title">Any Device</div><div class="feature-sub">Mobile · TV · PC</div></div>
-    </div>
 </section>
 
-<div class="status" id="status">STADY-PROXY · READY</div>
-<div class="footer">Made with ♥ by <a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer">aswadh_kr</a></div>
+<div class="status" id="status">STADY-PROXY • READY</div>
+
+<div style="text-align:center;margin-top:22px;padding-bottom:8px;font-size:14px;color:#888;">
+Made with ♥ by
+<a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;margin-left:4px;color:#ff2bd6;text-decoration:none;font-weight:700;text-shadow:0 0 5px rgba(255,43,214,.8),0 0 12px rgba(255,43,214,.55);">aswadh_kr</a>
+</div>
+</main>
 
 <script>
 const STREAM_URL = {stream_url!r};
 const BROWSER_OK = {str(browser_ok).lower()};
+const BROWSER_MKV = {str(detected_ext.lower() == ".mkv").lower()};
 
 function setStatus(text) {{
     const el = document.getElementById("status");
     if (el) el.textContent = text;
 }}
 
+async function streamMkv() {{
+    const area = document.getElementById("playerArea");
+    if (!area) return;
+
+    area.innerHTML = `
+        <div class="video-shell" id="videoShell">
+            <canvas id="mkvCanvas" style="width:100%;height:100%;display:block;background:#000"></canvas>
+            <div id="videoError" class="video-error"></div>
+            <div class="video-controls" id="videoControls">
+                <input id="videoSeek" class="video-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+                <div class="control-row">
+                    <button id="videoPlay" type="button" aria-label="Play or pause">▶</button>
+                    <span id="videoTime" class="video-time">0:00 / 0:00</span>
+                    <span class="control-spacer"></span>
+                    <button id="videoMute" type="button" aria-label="Mute">🔊</button>
+                    <button id="videoFullscreen" type="button" aria-label="Fullscreen">⛶</button>
+                </div>
+            </div>
+        </div>`;
+
+    const canvas = document.getElementById("mkvCanvas");
+    const ctx = canvas.getContext("2d", {{ alpha: false }});
+    const seek = document.getElementById("videoSeek");
+    const playBtn = document.getElementById("videoPlay");
+    const muteBtn = document.getElementById("videoMute");
+    const fullscreenBtn = document.getElementById("videoFullscreen");
+    const timeLabel = document.getElementById("videoTime");
+    const controls = document.getElementById("videoControls");
+    const shell = document.getElementById("videoShell");
+    const errorBox = document.getElementById("videoError");
+    let hideTimer = null;
+    let running = false;
+    let position = 0;
+    let duration = 0;
+    let raf = 0;
+    let generation = 0;
+    let audioContext = null;
+    let audioGain = null;
+    let audioNodes = [];
+    let videoTask = null;
+    let audioTask = null;
+    let mediabunny = null;
+    let input = null;
+    let videoTrack = null;
+    let audioTrack = null;
+    let videoSink = null;
+    let audioSink = null;
+
+    function formatTime(s) {{
+        if (!Number.isFinite(s) || s < 0) return "0:00";
+        s = Math.floor(s);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        return h ? `${{h}}:${{String(m).padStart(2,"0")}}:${{String(sec).padStart(2,"0")}}` : `${{m}}:${{String(sec).padStart(2,"0")}}`;
+    }}
+
+    function updateUI() {{
+        seek.value = duration ? String(Math.max(0, Math.min(1000, position / duration * 1000))) : "0";
+        timeLabel.textContent = `${{formatTime(position)}} / ${{formatTime(duration)}}`;
+        playBtn.textContent = running ? "❚❚" : "▶";
+        muteBtn.textContent = audioGain && audioGain.gain.value === 0 ? "🔇" : "🔊";
+    }}
+
+    function showControls() {{
+        controls.classList.add("show");
+        clearTimeout(hideTimer);
+        if (running) hideTimer = setTimeout(() => controls.classList.remove("show"), 2500);
+    }}
+
+    function stopAudio() {{
+        for (const node of audioNodes) {{
+            try {{ node.stop(); }} catch (_) {{}}
+            try {{ node.disconnect(); }} catch (_) {{}}
+        }}
+        audioNodes = [];
+    }}
+
+    async function stopPlayback() {{
+        running = false;
+        generation++;
+        if (raf) cancelAnimationFrame(raf);
+        stopAudio();
+        if (videoTask) {{ try {{ await videoTask; }} catch (_) {{}} }}
+        if (audioTask) {{ try {{ await audioTask; }} catch (_) {{}} }}
+        videoTask = null;
+        audioTask = null;
+        updateUI();
+    }}
+
+    async function ensureInput() {{
+        if (input) return;
+        setStatus("STADY-PROXY • LOADING MKV PLAYER…");
+        mediabunny = await import("https://cdn.jsdelivr.net/npm/mediabunny/+esm");
+        input = new mediabunny.Input({{
+            source: new mediabunny.UrlSource(STREAM_URL),
+            formats: mediabunny.ALL_FORMATS
+        }});
+        if (!(await input.canRead())) throw new Error("This MKV could not be read by the browser player.");
+        videoTrack = await input.getPrimaryVideoTrack();
+        audioTrack = await input.getPrimaryAudioTrack();
+        if (!videoTrack) throw new Error("No video track was found in this MKV.");
+        duration = await input.computeDuration();
+        videoSink = new mediabunny.CanvasSink(videoTrack, {{ poolSize: 2 }});
+        if (audioTrack) audioSink = new mediabunny.AudioBufferSink(audioTrack);
+        updateUI();
+    }}
+
+    async function renderVideo(myGeneration, startAt) {{
+        let firstWall = performance.now();
+        let firstTs = null;
+        try {{
+            for await (const frame of videoSink.canvases(startAt, Math.min(duration, startAt + 30))) {{
+                if (!running || myGeneration !== generation) return;
+                if (firstTs === null) {{ firstTs = frame.timestamp; firstWall = performance.now(); }}
+                const target = firstWall + (frame.timestamp - firstTs) * 1000;
+                const wait = target - performance.now();
+                if (wait > 2) await new Promise(r => setTimeout(r, Math.min(wait, 100)));
+                if (!running || myGeneration !== generation) return;
+                const c = frame.canvas;
+                if (canvas.width !== c.width || canvas.height !== c.height) {{ canvas.width = c.width; canvas.height = c.height; }}
+                ctx.drawImage(c, 0, 0, canvas.width, canvas.height);
+                position = frame.timestamp;
+                updateUI();
+                if (position >= duration - 0.05) {{ running = false; updateUI(); setStatus("STADY-PROXY • ENDED"); return; }}
+            }}
+        }} finally {{
+            if (videoSink) {{}}
+        }}
+    }}
+
+    async function renderAudio(myGeneration, startAt) {{
+        if (!audioSink || !audioContext) return;
+        const base = audioContext.currentTime + 0.08;
+        try {{
+            for await (const item of audioSink.buffers(startAt, Math.min(duration, startAt + 30))) {{
+                if (!running || myGeneration !== generation) return;
+                const node = audioContext.createBufferSource();
+                node.buffer = item.buffer;
+                node.connect(audioGain);
+                const when = Math.max(audioContext.currentTime + 0.02, base + (item.timestamp - startAt));
+                node.start(when);
+                audioNodes.push(node);
+            }}
+        }} catch (e) {{
+            console.warn("MKV audio playback error:", e);
+        }}
+    }}
+
+    async function playMkv() {{
+        try {{
+            await ensureInput();
+            if (!audioContext) {{
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                audioGain = audioContext.createGain();
+                audioGain.connect(audioContext.destination);
+            }}
+            await audioContext.resume();
+            if (running) return;
+            running = true;
+            generation++;
+            const myGeneration = generation;
+            setStatus("STADY-PROXY • MKV PLAYING ▶");
+            showControls();
+            videoTask = renderVideo(myGeneration, position);
+            audioTask = renderAudio(myGeneration, position);
+            await Promise.race([videoTask, audioTask]);
+            if (running && myGeneration === generation && position < duration - 0.1) {{
+                running = false;
+                updateUI();
+            }}
+        }} catch (e) {{
+            console.error(e);
+            running = false;
+            errorBox.innerHTML = "⚠️ <b>Browser MKV playback failed</b><br><span style=\"opacity:.8\">" + String(e.message || e).replace(/[<>&]/g, "") + "</span><br><br>Try VLC / MX Player if this device does not support the video's codec.";
+            errorBox.style.display = "block";
+            setStatus("STADY-PROXY • MKV PLAYER ERROR");
+            updateUI();
+        }}
+    }}
+
+    playBtn.onclick = () => running ? stopPlayback() : playMkv();
+    muteBtn.onclick = () => {{
+        if (!audioGain) return;
+        audioGain.gain.value = audioGain.gain.value === 0 ? 1 : 0;
+        updateUI();
+    }};
+    fullscreenBtn.onclick = () => {{
+        if (shell.requestFullscreen) shell.requestFullscreen().catch(() => {{}});
+    }};
+    seek.oninput = async () => {{
+        const target = duration ? Number(seek.value) / 1000 * duration : 0;
+        position = Math.max(0, Math.min(duration || 0, target));
+        updateUI();
+        const wasRunning = running;
+        await stopPlayback();
+        if (wasRunning) await playMkv();
+    }};
+    shell.onclick = (e) => {{
+        if (e.target.closest(".video-controls")) return;
+        if (running) stopPlayback(); else playMkv();
+        showControls();
+    }};
+    shell.addEventListener("mousemove", showControls);
+    shell.addEventListener("touchstart", showControls, {{passive:true}});
+    showControls();
+    updateUI();
+    setStatus("STADY-PROXY • MKV READY — TAP ▶");
+}}
+
 function stream() {{
+    if (BROWSER_MKV) {{
+        streamMkv();
+        return;
+    }}
+
     if (!BROWSER_OK) {{
-        setStatus("STADY-PROXY · USE EXTERNAL PLAYER");
+        setStatus("STADY-PROXY • USE VLC / MX PLAYER");
         togglePlayers(true);
         return;
     }}
@@ -2150,8 +2622,8 @@ function stream() {{
         <div class="video-shell" id="videoShell">
             <video id="mainVideo" autoplay playsinline preload="metadata" src="${{STREAM_URL}}"></video>
             <div id="videoError" class="video-error">
-                ⚠ Browser cannot decode this video's video track.<br>
-                <span style="opacity:.7">Use VLC / MX Player for this file.</span>
+                ⚠️ Browser cannot decode this video's video track.<br>
+                <span style="opacity:.8">Use VLC / MX Player for this file.</span>
             </div>
             <div class="video-controls" id="videoControls">
                 <input id="videoSeek" class="video-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
@@ -2199,23 +2671,47 @@ function stream() {{
         if (!video.paused) hideTimer = setTimeout(() => controls.classList.add("hide"), 2500);
     }}
 
-    playBtn.addEventListener("click", () => {{ if (video.paused) video.play().catch(() => {{}}); else video.pause(); showControls(); }});
+    playBtn.addEventListener("click", () => {{
+        if (video.paused) video.play().catch(() => {{}}); else video.pause();
+        showControls();
+    }});
     muteBtn.addEventListener("click", () => {{ video.muted = !video.muted; updateUI(); showControls(); }});
-    fullscreenBtn.addEventListener("click", async () => {{ try {{ const shell = document.getElementById("videoShell"); if (shell.requestFullscreen) await shell.requestFullscreen(); else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); }} catch (_) {{}} }});
-    seek.addEventListener("input", () => {{ if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = (Number(seek.value) / 1000) * video.duration; showControls(); }});
-    video.addEventListener("loadedmetadata", () => {{ updateUI(); if (video.videoWidth === 0 || video.videoHeight === 0) {{ errorBox.style.display = "block"; setStatus("STADY-PROXY · VIDEO CODEC NOT SUPPORTED"); }} }});
+    fullscreenBtn.addEventListener("click", async () => {{
+        try {{
+            const shell = document.getElementById("videoShell");
+            if (shell.requestFullscreen) await shell.requestFullscreen();
+            else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+        }} catch (_) {{}}
+    }});
+    seek.addEventListener("input", () => {{
+        if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = (Number(seek.value) / 1000) * video.duration;
+        showControls();
+    }});
+    video.addEventListener("loadedmetadata", () => {{
+        updateUI();
+        if (video.videoWidth === 0 || video.videoHeight === 0) {{
+            errorBox.style.display = "block";
+            setStatus("STADY-PROXY • VIDEO CODEC NOT SUPPORTED");
+        }}
+    }});
     video.addEventListener("timeupdate", updateUI);
-    video.addEventListener("play", () => {{ updateUI(); showControls(); setStatus("STADY-PROXY · PLAYING ▶"); }});
+    video.addEventListener("play", () => {{ updateUI(); showControls(); setStatus("STADY-PROXY • PLAYING ▶"); }});
     video.addEventListener("pause", () => {{ updateUI(); showControls(); }});
     video.addEventListener("volumechange", updateUI);
-    video.addEventListener("waiting", () => setStatus("STADY-PROXY · BUFFERING…"));
-    video.addEventListener("canplay", () => setStatus("STADY-PROXY · READY ▶"));
-    video.addEventListener("error", () => {{ if (video.error && (video.error.code === MediaError.MEDIA_ERR_DECODE || video.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {{ errorBox.style.display = "block"; setStatus("STADY-PROXY · BROWSER VIDEO NOT SUPPORTED"); }} }});
+    video.addEventListener("waiting", () => setStatus("STADY-PROXY • BUFFERING…"));
+    video.addEventListener("canplay", () => setStatus("STADY-PROXY • READY ▶"));
+    video.addEventListener("error", () => {{
+        if (video.error && (video.error.code === MediaError.MEDIA_ERR_DECODE || video.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {{
+            errorBox.style.display = "block";
+            setStatus("STADY-PROXY • BROWSER VIDEO NOT SUPPORTED");
+        }}
+    }});
     video.addEventListener("click", () => {{ if (video.paused) video.play().catch(() => {{}}); else video.pause(); showControls(); }});
     document.getElementById("videoShell").addEventListener("mousemove", showControls);
     document.getElementById("videoShell").addEventListener("touchstart", showControls, {{passive:true}});
+
     video.play().catch(() => {{ updateUI(); }});
-    setStatus("STADY-PROXY · LOADING ▶");
+    setStatus("STADY-PROXY • LOADING ▶");
 }}
 
 function togglePlayers(forceOpen=false) {{
@@ -2235,9 +2731,9 @@ function openPlayer(player) {{
     if (intent) location.href = intent; else location.href = STREAM_URL;
 }}
 </script>
-</main>
 </body>
 </html>"""
+
 
 # ============================================================
 # DEVICE SHARING
@@ -2578,7 +3074,7 @@ async def direct_proxy(
 
     file_size = int(row["size"])
 
-    mime = row["mime"] or get_mime(real_filename) or "application/octet-stream"
+    mime = resolve_media_mime(real_filename, row["mime"])
 
     range_header = request.headers.get(
         "range"
