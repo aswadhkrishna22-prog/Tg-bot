@@ -782,6 +782,41 @@ def get_mime(filename):
     return mime or "application/octet-stream"
 
 
+def get_stream_mime(filename, stored_mime=None):
+    """Return a browser-appropriate MIME type from the real filename.
+
+    Telegram metadata can occasionally contain a generic/incorrect MIME type
+    (for example an .mp4 arriving as application/zip). For streaming, prefer
+    the filename extension for known media containers.
+    """
+    ext = Path(filename or "").suffix.lower()
+    media_mimes = {
+        ".mp4": "video/mp4",
+        ".m4v": "video/mp4",
+        ".webm": "video/webm",
+        ".ogv": "video/ogg",
+        ".ogg": "audio/ogg",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".avi": "video/x-msvideo",
+        ".ts": "video/mp2t",
+        ".m2ts": "video/mp2t",
+        ".mts": "video/mp2t",
+        ".flv": "video/x-flv",
+        ".wmv": "video/x-ms-wmv",
+        ".3gp": "video/3gpp",
+        ".3g2": "video/3gpp2",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".wav": "audio/wav",
+        ".aac": "audio/aac",
+        ".flac": "audio/flac",
+    }
+    if ext in media_mimes:
+        return media_mimes[ext]
+    return stored_mime or get_mime(filename) or "application/octet-stream"
+
+
 def detect_media_profile(filename, mime=None):
     """Conservatively classify files for browser-vs-external playback.
 
@@ -808,7 +843,7 @@ def detect_media_profile(filename, mime=None):
         return {
             "browser_ok": False,
             "reason": "MKV/HEVC/10-bit or another browser-inconsistent format detected",
-            "label": "External Player Recommended",
+            "label": "Direct Browser Stream",
             "mime": mime,
             "extension": ext or "unknown",
         }
@@ -824,8 +859,8 @@ def detect_media_profile(filename, mime=None):
 
     return {
         "browser_ok": False,
-        "reason": "Unknown or browser-inconsistent media format",
-        "label": "External Player Recommended",
+        "reason": "Direct browser stream",
+        "label": "Direct Browser Stream",
         "mime": mime,
         "extension": ext or "unknown",
     }
@@ -1948,13 +1983,7 @@ async def watch(token):
     )
 
     file_size = int(row["size"])
-    mime = row["mime"] or get_mime(filename)
-    profile = detect_media_profile(filename, mime)
-    browser_ok = profile["browser_ok"]
-    profile_label = html.escape(profile["label"])
-    profile_reason = html.escape(profile["reason"])
-    detected_mime = html.escape(profile["mime"])
-    detected_ext = html.escape(profile["extension"])
+    mime = get_stream_mime(filename, row["mime"])
 
     if file_size >= 1024**3:
         size_str = f"{file_size / 1024**3:.2f} GB"
@@ -1964,10 +1993,7 @@ async def watch(token):
         size_str = f"{file_size / 1024:.2f} KB"
 
     created = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    stream_no_scheme = stream_url.replace("https://", "").replace("http://", "")
-    scheme = "https" if stream_url.startswith("https://") else "http"
 
-    # Give the watch page a share destination as well. Existing share tokens are reused.
     try:
         share_token = row.get("share_token") if hasattr(row, "get") else None
         if not share_token:
@@ -1976,26 +2002,12 @@ async def watch(token):
     except Exception:
         share_url = stream_url
 
-    browser_button = (
-        '<button class="btn stream-btn" id="browserBtn" onclick="stream()">▶ Stream Now<small>Watch directly in browser</small></button>'
-        if browser_ok
-        else '<button class="btn stream-btn disabled" type="button" disabled>⚠ Browser Stream<small>Use an external player for this codec</small></button>'
-    )
-
-    initial_media = (
-        f"""<div class="poster-content">
-            <div class="poster-icon">▶</div>
-            <div class="poster-title">Ready to stream</div>
-            <div class="poster-sub">Tap Stream Now to start playback directly from Telegram.</div>
-            <div class="poster-codec">{detected_ext} · {detected_mime}</div>
-        </div>"""
-        if browser_ok else
-        f"""<div class="poster-content">
-            <div class="poster-icon">🎬</div>
-            <div class="poster-title">External Player Recommended</div>
-            <div class="poster-sub">{profile_reason}</div>
-            <div class="poster-codec">{detected_ext} · {detected_mime}</div>
-        </div>"""
+    # The poster is intentionally clean: forest image + play button only.
+    # The real <video> element is created after the user taps play, so native
+    # browser controls provide reliable pause, seek, volume and fullscreen.
+    forest_image = (
+        "https://images.unsplash.com/photo-1448375240586-882707db888b"
+        "?auto=format&fit=crop&w=1600&q=90"
     )
 
     return f"""<!DOCTYPE html>
@@ -2007,85 +2019,294 @@ async def watch(token):
 <title>STADY-PROXY | {safe_name}</title>
 <style>
 {STADY_CSS}
+
+/* ==========================================================
+   PREMIUM WATCH PLAYER — clean poster, native video controls
+   ========================================================== */
+.watch-page {{
+    width: min(1120px, calc(100% - 28px));
+    margin: 0 auto;
+    padding: 28px 0 48px;
+}}
+
+.watch-header {{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    margin-bottom:22px;
+}}
+
+.watch-brand {{
+    font-size:22px;
+    font-weight:900;
+    letter-spacing:-.4px;
+}}
+.watch-brand span {{
+    background:linear-gradient(90deg,#9b5cff,#4cc9ff);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+}}
+.watch-status {{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 12px;
+    border:1px solid rgba(110,140,190,.18);
+    border-radius:999px;
+    background:rgba(12,17,30,.72);
+    color:#aeb9cc;
+    font-size:12px;
+    font-weight:700;
+}}
+.watch-status i {{
+    width:7px;
+    height:7px;
+    border-radius:50%;
+    background:#5ee7a5;
+    box-shadow:0 0 12px rgba(94,231,165,.7);
+}}
+
+.media-card {{
+    overflow:hidden;
+    border-radius:24px;
+    border:1px solid rgba(125,145,190,.18);
+    background:#050913;
+    box-shadow:0 24px 80px rgba(0,0,0,.42);
+}}
+
+.poster {{
+    position:relative;
+    aspect-ratio:16/9;
+    min-height:240px;
+    overflow:hidden;
+    background:#07100b;
+}}
+.poster::before {{
+    content:"";
+    position:absolute;
+    inset:0;
+    background-image:url("{forest_image}");
+    background-size:cover;
+    background-position:center;
+    transform:scale(1.015);
+}}
+.poster::after {{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:linear-gradient(180deg,rgba(2,5,10,.06),rgba(2,5,10,.38));
+}}
+
+.poster.playing::before,
+.poster.playing::after {{
+    display:none;
+}}
+
+
+.poster-play {{
+    position:absolute;
+    z-index:2;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    width:92px;
+    height:92px;
+    border:1px solid rgba(255,255,255,.45);
+    border-radius:50%;
+    background:rgba(5,10,20,.82);
+    color:white;
+    display:grid;
+    place-items:center;
+    font-size:34px;
+    padding:0 0 0 5px;
+    cursor:pointer;
+    box-shadow:0 12px 42px rgba(0,0,0,.45), 0 0 0 7px rgba(120,95,255,.10);
+    backdrop-filter:blur(14px);
+    transition:transform .18s ease, box-shadow .18s ease, background .18s ease;
+}}
+.poster-play:hover {{
+    transform:translate(-50%,-50%) scale(1.06);
+    background:rgba(10,16,30,.92);
+    box-shadow:0 16px 48px rgba(0,0,0,.5), 0 0 0 9px rgba(120,95,255,.13);
+}}
+.poster-play:active {{
+    transform:translate(-50%,-50%) scale(.97);
+}}
+
+.video-shell {{
+    position:relative;
+    width:100%;
+    aspect-ratio:16/9;
+    background:#000;
+}}
+.video-shell video {{
+    display:block;
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    background:#000;
+}}
+
+.video-error {{
+    display:none;
+    position:absolute;
+    left:16px;
+    right:16px;
+    bottom:70px;
+    z-index:3;
+    padding:12px 14px;
+    border:1px solid rgba(255,120,120,.25);
+    border-radius:12px;
+    background:rgba(20,5,8,.86);
+    color:#ffd4d4;
+    text-align:center;
+    font-size:13px;
+    backdrop-filter:blur(12px);
+}}
+
+.file-title-card {{
+    padding:20px 22px;
+    border-top:1px solid rgba(125,145,190,.12);
+}}
+.file-title {{
+    margin:0;
+    color:#f4f7ff;
+    font-size:18px;
+    font-weight:800;
+    line-height:1.4;
+    overflow-wrap:anywhere;
+}}
+.file-sub {{
+    margin-top:6px;
+    color:#8995aa;
+    font-size:13px;
+}}
+
+.action-grid {{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px;
+    margin-top:16px;
+}}
+.action-btn {{
+    min-height:58px;
+    border-radius:16px;
+    border:1px solid rgba(125,145,190,.16);
+    background:linear-gradient(180deg,#0d1423,#090f1b);
+    color:#edf2fb;
+    text-decoration:none;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:9px;
+    font-size:15px;
+    font-weight:800;
+    cursor:pointer;
+    transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}}
+.action-btn:hover {{
+    transform:translateY(-2px);
+    border-color:rgba(126,95,255,.55);
+    background:linear-gradient(180deg,#11192b,#0b1220);
+}}
+.action-btn.primary {{
+    background:linear-gradient(135deg,#7139d8,#2e74d8);
+    border-color:rgba(155,120,255,.48);
+}}
+
+.info-card {{
+    margin-top:18px;
+    overflow:hidden;
+    border:1px solid rgba(125,145,190,.14);
+    border-radius:20px;
+    background:rgba(8,12,21,.78);
+}}
+.info-head {{
+    padding:18px 20px;
+    border-bottom:1px solid rgba(125,145,190,.12);
+    font-size:13px;
+    font-weight:900;
+    letter-spacing:.8px;
+    text-transform:uppercase;
+    color:#c6d0e2;
+}}
+.info-row {{
+    display:grid;
+    grid-template-columns:150px 1fr;
+    gap:16px;
+    padding:15px 20px;
+    border-bottom:1px solid rgba(125,145,190,.08);
+}}
+.info-row:last-child {{ border-bottom:0; }}
+.info-label {{ color:#727f95; font-size:13px; }}
+.info-value {{ color:#dce4f1; font-size:14px; overflow-wrap:anywhere; }}
+
+@media (max-width:650px) {{
+    .watch-page {{ width:calc(100% - 20px); padding-top:16px; }}
+    .watch-header {{ margin-bottom:14px; }}
+    .watch-brand {{ font-size:19px; }}
+    .watch-status {{ font-size:10px; padding:7px 9px; }}
+    .media-card {{ border-radius:18px; }}
+    .poster {{ min-height:205px; }}
+    .poster-play {{ width:72px; height:72px; font-size:27px; }}
+    .file-title-card {{ padding:16px; }}
+    .action-grid {{ grid-template-columns:1fr; }}
+    .info-row {{ grid-template-columns:1fr; gap:5px; padding:13px 16px; }}
+}}
 </style>
 </head>
 <body>
-<main class="page">
+<main class="watch-page">
 
-<header class="topbar">
-    <div class="brand-wrap">
-        <div class="logo-mark">▶</div>
-        <div>
-            <div class="brand-name">STADY-<span>PROXY</span></div>
-            <div class="brand-sub">Telegram Direct Proxy</div>
-        </div>
-    </div>
-    <div class="top-actions">
-        <div class="online"><i></i> SERVER ONLINE</div>
-        <a class="top-btn" href="{share_url}" target="_blank" rel="noopener">⌘&nbsp; Share Link</a>
-        <button class="menu-btn" type="button" onclick="window.scrollTo({{top:document.body.scrollHeight,behavior:'smooth'}})">⋮</button>
-    </div>
+<header class="watch-header">
+    <div class="watch-brand">STADY-<span>PROXY</span></div>
+    <div class="watch-status"><i></i> ONLINE</div>
 </header>
 
-<section class="hero">
-    <h1>Stream. Download. Enjoy.</h1>
-    <p>High-speed streaming directly from Telegram</p>
-</section>
-
-<section class="frame">
-    <div class="player-wrap">
-        <div class="poster" id="playerArea">
-            {initial_media}
-        </div>
+<section class="media-card">
+    <div class="poster" id="playerArea" aria-label="Video preview">
+        <button class="poster-play" type="button" onclick="startVideo()" aria-label="Play video">▶</button>
     </div>
-
-    <div class="profile-row">
-        <span class="profile-badge">● {profile_label}</span>
-    </div>
-
-    <div class="action-panel">
-        <div class="primary-actions">
-            {browser_button}
-            <a class="btn download-btn" href="{stream_url}&action=download" download style="text-align:center;display:block;">⇩ Download File<small>High-speed direct download</small></a>
-        </div>
-        <div class="secondary-actions">
-            <button class="btn" type="button" onclick="togglePlayers()">🎬 External Players</button>
-            <button class="btn" type="button" onclick="copyShareLink()">⛓ Copy Share Link</button>
-        </div>
-        <div class="players" id="players">
-            <button type="button" onclick="openPlayer('mx')">MX Player</button>
-            <button type="button" onclick="openPlayer('vlc')">VLC Mobile</button>
-            <button type="button" onclick="openPlayer('playit')">PlayIt</button>
-            <button type="button" onclick="openPlayer('kmplayer')">KMPlayer</button>
-            <button type="button" onclick="openPlayer('nplayer')">nPlayer</button>
-        </div>
-    </div>
-
-    <div class="info">
-        <div class="info-head"><span class="ico">▣</span> File Information</div>
-        <div class="info-row"><div class="info-label">File Name</div><div class="info-value">{safe_name}</div></div>
-        <div class="info-row"><div class="info-label">File Size</div><div class="info-value">{size_str}</div></div>
-        <div class="info-row"><div class="info-label">File Owner</div><div class="info-value verified">STADY-PROXY ✓</div></div>
-        <div class="info-row"><div class="info-label">Created Time</div><div class="info-value">{created}</div></div>
+    <div class="file-title-card">
+        <p class="file-title">{safe_name}</p>
+        <div class="file-sub">{size_str} · {html.escape(mime)}</div>
     </div>
 </section>
 
-<div class="features">
-    <div class="feature"><div class="feature-icon">ϟ</div><strong>Blazing Fast</strong><span>Optimized streaming delivery</span></div>
-    <div class="feature"><div class="feature-icon">◈</div><strong>Secure Link</strong><span>Temporary access URL</span></div>
-    <div class="feature"><div class="feature-icon">☁</div><strong>No Storage</strong><span>Stream directly from Telegram</span></div>
-    <div class="feature"><div class="feature-icon">▣</div><strong>Any Device</strong><span>Mobile · TV · PC</span></div>
+<div class="action-grid">
+    <a class="action-btn primary" href="{stream_url}&action=download" download>⇩ Download File</a>
+    <button class="action-btn" type="button" onclick="copyShareLink()">⛓ Copy Share Link</button>
 </div>
 
-<div class="status" id="status">STADY-PROXY • READY</div>
-<div class="footer"><span class="brand-footer">STADY-PROXY</span> · Your Premium Telegram Streaming Gateway<br><br>❤️ Made with <a href="https://www.instagram.com/2aswadhh_._kr" target="_blank" rel="noopener noreferrer">@aswadh_kr</a></div>
+<div class="action-grid" style="margin-top:12px;">
+    <button class="action-btn" type="button" onclick="togglePlayers()">🎬 External Players</button>
+</div>
+
+<div class="players" id="players" style="display:none;">
+    <button type="button" onclick="openPlayer('mx')">MX Player</button>
+    <button type="button" onclick="openPlayer('vlc')">VLC Mobile</button>
+    <button type="button" onclick="openPlayer('playit')">PlayIt</button>
+    <button type="button" onclick="openPlayer('kmplayer')">KMPlayer</button>
+    <button type="button" onclick="openPlayer('nplayer')">nPlayer</button>
+</div>
+
+<section class="info-card">
+    <div class="info-head">▣ File Information</div>
+    <div class="info-row"><div class="info-label">File Name</div><div class="info-value">{safe_name}</div></div>
+    <div class="info-row"><div class="info-label">File Size</div><div class="info-value">{size_str}</div></div>
+    <div class="info-row"><div class="info-label">File Owner</div><div class="info-value">STADY-PROXY ✓</div></div>
+    <div class="info-row"><div class="info-label">Created Time</div><div class="info-value">{created}</div></div>
+</section>
+
+<div class="status" id="status" style="margin-top:18px;">STADY-PROXY • READY</div>
 
 </main>
 
 <script>
 const STREAM_URL = {stream_url!r};
 const SHARE_URL = {share_url!r};
-const BROWSER_OK = {str(browser_ok).lower()};
 
 function setStatus(text) {{
     const el = document.getElementById("status");
@@ -2101,133 +2322,62 @@ async function copyShareLink() {{
     }}
 }}
 
-function stream() {{
-    if (!BROWSER_OK) {{
-        setStatus("STADY-PROXY • USE VLC / MX PLAYER");
-        togglePlayers(true);
-        return;
-    }}
-
+function startVideo() {{
     const area = document.getElementById("playerArea");
-    if (!area) return;
+    if (!area || area.querySelector("video")) return;
 
+    area.classList.add("playing");
     area.innerHTML = `
-        <div class="video-shell" id="videoShell">
-            <video id="mainVideo" autoplay playsinline preload="metadata" src="${{STREAM_URL}}"></video>
+        <div class="video-shell">
+            <video id="mainVideo" controls playsinline preload="metadata" autoplay src="${{STREAM_URL}}"></video>
             <div id="videoError" class="video-error">
-                ⚠️ Browser cannot decode this video's video track.<br>
-                <span style="opacity:.8">Use VLC / MX Player for this file.</span>
-            </div>
-            <div class="video-controls" id="videoControls">
-                <input id="videoSeek" class="video-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
-                <div class="control-row">
-                    <button id="videoPlay" type="button" aria-label="Play or pause">▶</button>
-                    <span id="videoTime" class="video-time">0:00 / 0:00</span>
-                    <span class="control-spacer"></span>
-                    <button id="videoMute" type="button" aria-label="Mute">🔊</button>
-                    <button id="videoFullscreen" type="button" aria-label="Fullscreen">⛶</button>
-                </div>
+                Browser could not decode this video's codec/container.
             </div>
         </div>`;
 
     const video = document.getElementById("mainVideo");
-    const seek = document.getElementById("videoSeek");
-    const playBtn = document.getElementById("videoPlay");
-    const muteBtn = document.getElementById("videoMute");
-    const fullscreenBtn = document.getElementById("videoFullscreen");
-    const timeLabel = document.getElementById("videoTime");
     const errorBox = document.getElementById("videoError");
-    const controls = document.getElementById("videoControls");
-    let hideTimer = null;
 
-    function formatTime(seconds) {{
-        if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        if (h > 0) return h + ":" + String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
-        return m + ":" + String(s).padStart(2,"0");
-    }}
-
-    function updateUI() {{
-        const duration = video.duration;
-        const current = video.currentTime || 0;
-        timeLabel.textContent = formatTime(current) + " / " + formatTime(duration);
-        if (Number.isFinite(duration) && duration > 0) seek.value = String(Math.round((current / duration) * 1000));
-        playBtn.textContent = video.paused ? "▶" : "Ⅱ";
-        muteBtn.textContent = video.muted ? "🔇" : "🔊";
-    }}
-
-    function showControls() {{
-        controls.classList.remove("hide");
-        clearTimeout(hideTimer);
-        if (!video.paused) hideTimer = setTimeout(() => controls.classList.add("hide"), 2500);
-    }}
-
-    playBtn.addEventListener("click", () => {{
-        if (video.paused) video.play().catch(() => {{}}); else video.pause();
-        showControls();
-    }});
-    muteBtn.addEventListener("click", () => {{ video.muted = !video.muted; updateUI(); showControls(); }});
-    fullscreenBtn.addEventListener("click", async () => {{
-        try {{
-            const shell = document.getElementById("videoShell");
-            if (shell.requestFullscreen) await shell.requestFullscreen();
-            else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
-        }} catch (_) {{}}
-    }});
-    seek.addEventListener("input", () => {{
-        if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = (Number(seek.value) / 1000) * video.duration;
-        showControls();
-    }});
-    video.addEventListener("loadedmetadata", () => {{
-        updateUI();
-        if (video.videoWidth === 0 || video.videoHeight === 0) {{
-            errorBox.style.display = "block";
-            setStatus("STADY-PROXY • VIDEO CODEC NOT SUPPORTED");
-        }}
-    }});
-    video.addEventListener("timeupdate", updateUI);
-    video.addEventListener("play", () => {{ updateUI(); showControls(); setStatus("STADY-PROXY • PLAYING ▶"); }});
-    video.addEventListener("pause", () => {{ updateUI(); showControls(); }});
-    video.addEventListener("volumechange", updateUI);
+    video.addEventListener("loadstart", () => setStatus("STADY-PROXY • LOADING…"));
     video.addEventListener("waiting", () => setStatus("STADY-PROXY • BUFFERING…"));
     video.addEventListener("canplay", () => setStatus("STADY-PROXY • READY ▶"));
+    video.addEventListener("play", () => setStatus("STADY-PROXY • PLAYING ▶"));
+    video.addEventListener("pause", () => setStatus("STADY-PROXY • PAUSED"));
+    video.addEventListener("ended", () => setStatus("STADY-PROXY • ENDED"));
     video.addEventListener("error", () => {{
-        if (video.error && (video.error.code === MediaError.MEDIA_ERR_DECODE || video.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)) {{
-            errorBox.style.display = "block";
-            setStatus("STADY-PROXY • BROWSER VIDEO NOT SUPPORTED");
-        }}
+        errorBox.style.display = "block";
+        setStatus("STADY-PROXY • BROWSER CODEC ERROR");
     }});
-    video.addEventListener("click", () => {{ if (video.paused) video.play().catch(() => {{}}); else video.pause(); showControls(); }});
-    document.getElementById("videoShell").addEventListener("mousemove", showControls);
-    document.getElementById("videoShell").addEventListener("touchstart", showControls, {{passive:true}});
 
-    video.play().catch(() => {{ updateUI(); }});
-    setStatus("STADY-PROXY • LOADING ▶");
+    // This call is made from the user's button click, so mobile browsers are
+    // allowed to start playback with audio in normal circumstances.
+    video.play().catch(() => {{
+        setStatus("STADY-PROXY • TAP PLAY TO START");
+    }});
 }}
 
-function togglePlayers(forceOpen=false) {{
+function togglePlayers() {{
     const players = document.getElementById("players");
     if (!players) return;
-    if (forceOpen) players.style.display = "grid";
-    else players.style.display = players.style.display === "grid" ? "none" : "grid";
+    players.style.display = players.style.display === "grid" ? "none" : "grid";
 }}
 
 function openPlayer(player) {{
+    const noScheme = STREAM_URL.replace("https://", "").replace("http://", "");
+    const scheme = STREAM_URL.startsWith("https://") ? "https" : "http";
     let intent = "";
-    if (player === "mx") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.mxtech.videoplayer.ad;type=video/*;end;";
-    else if (player === "vlc") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=org.videolan.vlc;type=video/*;end;";
-    else if (player === "playit") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.playit.videoplayer;type=video/*;end;";
-    else if (player === "kmplayer") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};package=com.kmplayer;type=video/*;end;";
-    else if (player === "nplayer") intent = "intent://" + "{stream_no_scheme}" + "#Intent;scheme={scheme};type=video/*;end;";
-    if (intent) location.href = intent; else location.href = STREAM_URL;
+
+    if (player === "mx") intent = "intent://" + noScheme + "#Intent;scheme=" + scheme + ";package=com.mxtech.videoplayer.ad;type=video/*;end;";
+    else if (player === "vlc") intent = "intent://" + noScheme + "#Intent;scheme=" + scheme + ";package=org.videolan.vlc;type=video/*;end;";
+    else if (player === "playit") intent = "intent://" + noScheme + "#Intent;scheme=" + scheme + ";package=com.playit.videoplayer;type=video/*;end;";
+    else if (player === "kmplayer") intent = "intent://" + noScheme + "#Intent;scheme=" + scheme + ";package=com.kmplayer;type=video/*;end;";
+    else if (player === "nplayer") intent = "intent://" + noScheme + "#Intent;scheme=" + scheme + ";type=video/*;end;";
+
+    if (intent) location.href = intent;
 }}
 </script>
 </body>
 </html>"""
-
-
 # ============================================================
 # DEVICE SHARING
 # ============================================================
@@ -2567,7 +2717,9 @@ async def direct_proxy(
 
     file_size = int(row["size"])
 
-    mime = row["mime"] or get_mime(real_filename) or "application/octet-stream"
+    # Use the real filename extension for media responses. Telegram can store
+    # an incorrect generic MIME (for example application/zip for an .mp4).
+    mime = get_stream_mime(real_filename, row["mime"])
 
     range_header = request.headers.get(
         "range"
