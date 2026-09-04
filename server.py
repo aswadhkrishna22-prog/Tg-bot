@@ -2215,7 +2215,50 @@ async def watch(token):
     background:linear-gradient(135deg,#7139d8,#2e74d8);
     border-color:rgba(155,120,255,.48);
 }}
+.footer {{
+    margin-top: 28px;
+    padding: 18px 0 8px;
+    text-align: center;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.45);
+}}
 
+.footer .heart {{
+    color: #ff4d6d;
+    font-size: 15px;
+    margin: 0 3px;
+}}
+
+.instagram-link {{
+    margin-left: 4px;
+    text-decoration: none;
+    font-weight: 600;
+
+    background: linear-gradient(
+        45deg,
+        #feda75,
+        #fa7e1e,
+        #d62976,
+        #962fbf,
+        #4f5bd5
+    );
+
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+
+    transition: opacity 0.2s ease;
+}}
+
+.instagram-link:hover {{
+    opacity: 0.8;
+}}
+
+.instagram-icon {{
+    font-size: 16px;
+    margin-right: 3px;
+    -webkit-text-fill-color: #d62976;
+}}
 .info-card {{
     margin-top:18px;
     overflow:hidden;
