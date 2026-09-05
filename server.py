@@ -522,6 +522,38 @@ LAST_ERROR = "None"
 
 ERROR_PAGE = BASE_DIR / "stady_proxy_404.html"
 ERROR_IMAGE = BASE_DIR / "stady-proxy-404.png"
+RAIN_OVERLAY = BASE_DIR / "stady-proxy-rain-overlay-v2.mp4"
+RAIN_OVERLAY_WEBM = BASE_DIR / "stady-proxy-rain-overlay-v2.webm"
+
+
+@app.get("/stady-proxy-rain-overlay-v2.webm")
+async def stady_proxy_rain_overlay_webm():
+    """Serve the compact VP9 version first for faster 404 loading."""
+    if not RAIN_OVERLAY_WEBM.is_file():
+        raise HTTPException(status_code=404, detail="Rain overlay WebM asset not found")
+    return FileResponse(
+        RAIN_OVERLAY_WEBM,
+        media_type="video/webm",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
+@app.get("/stady-proxy-rain-overlay-v2.mp4")
+async def stady_proxy_rain_overlay():
+    """Serve the small generated water-mask animation used by /watch 404."""
+    if not RAIN_OVERLAY.is_file():
+        raise HTTPException(status_code=404, detail="Rain overlay asset not found")
+    return FileResponse(
+        RAIN_OVERLAY,
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Accept-Ranges": "bytes",
+        },
+    )
 
 
 @app.get("/stady-proxy-404.png")
@@ -534,6 +566,42 @@ async def stady_proxy_404_image():
 
 
 def stady_error_page():
+    try:
+        return ERROR_PAGE.read_text(
+            encoding="utf-8"
+        )
+
+    except Exception as error:
+        print(
+            "[!] Could not load custom 404 page:",
+            error
+        )
+
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>STADY-PROXY — 404 ERROR</title>
+        </head>
+        <body style="
+            background:#020812;
+            color:#69f7ff;
+            text-align:center;
+            font-family:Arial;
+            padding-top:100px;
+        ">
+            <h1>STADY-PROXY</h1>
+            <h2>404 — FILE NOT AVAILABLE</h2>
+            <a href="/" style="color:#ff24d7;">
+                Return Home
+            </a>
+        </body>
+        </html>
+        """
+
+
+def stady_watch_404_page():
     """Render the 404 state as a popup over the STADY-PROXY watch UI.
 
     The browser stays on the requested URL.  There is no redirect to a
@@ -598,9 +666,11 @@ filter:blur(.25px);animation:rainDrift 7s linear infinite}}
 .error-overlay::after{{content:"";position:absolute;inset:0;pointer-events:none;opacity:.16;background:repeating-linear-gradient(102deg,transparent 0 46px,rgba(190,225,255,.22) 47px,transparent 49px 92px);animation:rainSlide 1.8s linear infinite}}
 @keyframes rainDrift{{from{{transform:translateY(-2%)}}to{{transform:translateY(2%)}}}}
 @keyframes rainSlide{{from{{transform:translateY(-45px)}}to{{transform:translateY(45px)}}}}
-.error-modal{{position:relative;z-index:2;width:min(360px,calc(100vw - 34px));border:1px solid rgba(255,255,255,.20);border-radius:22px;background:linear-gradient(145deg,rgba(36,42,54,.72),rgba(10,14,23,.82));box-shadow:0 28px 90px rgba(0,0,0,.66),0 0 65px rgba(255,45,75,.12),inset 0 1px 0 rgba(255,255,255,.10);backdrop-filter:blur(20px) saturate(125%);-webkit-backdrop-filter:blur(20px) saturate(125%);padding:28px 22px 23px;text-align:center;overflow:hidden}}
+.rain-video{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:8;pointer-events:none;opacity:.94;mix-blend-mode:screen;filter:contrast(1.18) brightness(1.08) saturate(.82);will-change:transform}}
+.error-modal{{position:relative;z-index:7;width:min(360px,calc(100vw - 34px));border:1px solid rgba(255,255,255,.20);border-radius:22px;background:linear-gradient(145deg,rgba(36,42,54,.72),rgba(10,14,23,.82));box-shadow:0 28px 90px rgba(0,0,0,.66),0 0 65px rgba(255,45,75,.12),inset 0 1px 0 rgba(255,255,255,.10);backdrop-filter:blur(20px) saturate(125%);-webkit-backdrop-filter:blur(20px) saturate(125%);padding:28px 22px 23px;text-align:center;overflow:hidden}}
 .error-modal::before{{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(125deg,rgba(255,255,255,.10),transparent 24%,transparent 72%,rgba(255,255,255,.035));border-radius:inherit}}
 .error-modal::after{{content:"";position:absolute;left:12%;right:12%;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.42),transparent);opacity:.7}}
+.error-modal .glass-shine{{position:absolute;inset:0;pointer-events:none;border-radius:inherit;background:radial-gradient(ellipse at 22% 12%,rgba(255,255,255,.10),transparent 34%),linear-gradient(112deg,transparent 0 45%,rgba(255,255,255,.035) 50%,transparent 56%);mix-blend-mode:screen;z-index:0}}
 .error-icon{{position:relative;z-index:1;width:58px;height:58px;margin:0 auto 2px;display:grid;place-items:center;color:#ff5265;font-size:49px;line-height:1;text-shadow:0 0 18px rgba(255,55,75,.72)}}
 .error-code{{position:relative;z-index:1;margin:0;font-size:64px;line-height:1;font-weight:850;letter-spacing:3px;background:linear-gradient(180deg,rgba(255,255,255,.94) 0%,rgba(255,112,128,.92) 38%,rgba(255,48,72,.78) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;text-shadow:0 0 10px rgba(255,70,90,.28),0 8px 26px rgba(0,0,0,.28);filter:drop-shadow(0 0 10px rgba(255,55,75,.22))}}
 .error-title{{position:relative;z-index:1;margin:15px 0 0;color:rgba(245,247,252,.92);font-size:15px;letter-spacing:4px;font-weight:500;text-shadow:0 1px 8px rgba(255,255,255,.08)}}
@@ -632,7 +702,11 @@ filter:blur(.25px);animation:rainDrift 7s linear infinite}}
 <div class="fake-status"></div>
 </main>
 <div class="error-overlay" role="dialog" aria-modal="true" aria-labelledby="errorTitle">
-<section class="error-modal">
+<video class="rain-video" autoplay muted loop playsinline preload="auto" aria-hidden="true" disablepictureinpicture disableremoteplayback>
+<source src="/stady-proxy-rain-overlay-v2.webm" type="video/webm">
+<source src="/stady-proxy-rain-overlay-v2.mp4" type="video/mp4">
+</video>
+<section class="error-modal"><div class="glass-shine"></div>
 <div class="error-icon">⚠</div>
 <h1 class="error-code">404</h1>
 <div id="errorTitle" class="error-title">PAGE NOT FOUND</div>
@@ -2049,7 +2123,7 @@ async def watch(token):
         # 404 popup over a STADY-PROXY watch-style background instead of
         # sending them to a separate 404 document/page.
         return HTMLResponse(
-            content=stady_error_page(),
+            content=stady_watch_404_page(),
             status_code=404,
             headers={"Cache-Control": "no-store"}
         )
@@ -3287,7 +3361,7 @@ async def security_v3_server_middleware(request, call_next):
     token = None
     action = "request"
     parts = path.strip("/").split("/")
-    if parts and parts[0] and parts[0] not in {"health", "metrics", "share", "receive", "pair", "stady-proxy-404.png"}:
+    if parts and parts[0] and parts[0] not in {"health", "metrics", "share", "receive", "pair", "stady-proxy-404.png", "stady-proxy-rain-overlay-v2.mp4", "stady-proxy-rain-overlay-v2.webm"}:
         token = parts[0]
     user_id = security_v3_server_user_id_from_token(token) if token else 0
     if user_id and security_v3_server_temp_blocked(user_id):
