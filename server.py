@@ -534,39 +534,235 @@ async def stady_proxy_404_image():
 
 
 def stady_error_page():
-    try:
-        return ERROR_PAGE.read_text(
-            encoding="utf-8"
-        )
+    """Render the 404 state as a popup over the STADY-PROXY watch UI.
 
-    except Exception as error:
-        print(
-            "[!] Could not load custom 404 page:",
-            error
-        )
+    The browser stays on the requested URL.  There is no redirect to a
+    separate /404 route; the response itself contains the dimmed/blurred
+    watch-style page and the centered glass 404 dialog.
+    """
+    forest_image = (
+        "https://images.unsplash.com/photo-1448375240586-882707db888b"
+        "?auto=format&fit=crop&w=1600&q=90"
+    )
 
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>STADY-PROXY — 404 ERROR</title>
-        </head>
-        <body style="
-            background:#020812;
-            color:#69f7ff;
-            text-align:center;
-            font-family:Arial;
-            padding-top:100px;
-        ">
-            <h1>STADY-PROXY</h1>
-            <h2>404 — FILE NOT AVAILABLE</h2>
-            <a href="/" style="color:#ff24d7;">
-                Return Home
-            </a>
-        </body>
-        </html>
-        """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#05070d">
+<title>STADY-PROXY | 404</title>
+<style>
+*{{box-sizing:border-box}}
+html,body{{margin:0;min-height:100%;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#05070d;color:#eef2ff}}
+body{{overflow-x:hidden;background:
+ radial-gradient(circle at 8% 8%,rgba(124,58,237,.13),transparent 30%),
+ radial-gradient(circle at 92% 42%,rgba(6,182,212,.09),transparent 28%),
+ linear-gradient(180deg,#05070d 0%,#070a12 52%,#04060b 100%)}}
+.watch-page{{width:min(1120px,calc(100% - 28px));margin:0 auto;padding:28px 0 48px}}
+.watch-header{{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}}
+.watch-brand{{font-size:22px;font-weight:900;letter-spacing:-.4px}}
+.watch-brand span{{background:linear-gradient(90deg,#9b5cff,#4cc9ff);-webkit-background-clip:text;background-clip:text;color:transparent}}
+.watch-status{{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid rgba(110,140,190,.18);border-radius:999px;background:rgba(12,17,30,.72);color:#aeb9cc;font-size:12px;font-weight:700}}
+.watch-status i{{width:7px;height:7px;border-radius:50%;background:#5ee7a5;box-shadow:0 0 12px rgba(94,231,165,.7)}}
+.media-card{{overflow:hidden;border-radius:24px;border:1px solid rgba(125,145,190,.18);background:#050913;box-shadow:0 24px 80px rgba(0,0,0,.42)}}
+.poster{{position:relative;aspect-ratio:16/9;min-height:240px;overflow:hidden;background:#07100b}}
+.poster::before{{content:"";position:absolute;inset:0;background-image:url("{forest_image}");background-size:cover;background-position:center;transform:scale(1.015)}}
+.poster::after{{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,5,10,.10),rgba(2,5,10,.48))}}
+.poster-play{{position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);width:78px;height:78px;border:1px solid rgba(255,255,255,.30);border-radius:50%;background:rgba(5,10,20,.72);color:white;display:grid;place-items:center;font-size:30px;padding-left:4px;box-shadow:0 12px 42px rgba(0,0,0,.45);backdrop-filter:blur(12px)}}
+.file-title-card{{padding:20px 22px;border-top:1px solid rgba(125,145,190,.12)}}
+.skeleton-title{{height:20px;width:72%;border-radius:8px;background:rgba(148,163,184,.13)}}
+.skeleton-sub{{margin-top:10px;height:13px;width:34%;border-radius:7px;background:rgba(148,163,184,.09)}}
+.action-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}}
+.action-btn{{min-height:58px;border-radius:16px;border:1px solid rgba(125,145,190,.16);background:linear-gradient(180deg,#0d1423,#090f1b);color:#edf2fb;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800}}
+.info-card{{margin-top:18px;overflow:hidden;border:1px solid rgba(125,145,190,.14);border-radius:20px;background:rgba(8,12,21,.78)}}
+.info-head{{padding:18px 20px;border-bottom:1px solid rgba(125,145,190,.12);font-size:13px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:#c6d0e2}}
+.info-row{{display:grid;grid-template-columns:150px 1fr;gap:16px;padding:15px 20px;border-bottom:1px solid rgba(125,145,190,.08)}}
+.info-row:last-child{{border-bottom:0}}
+.info-label{{color:#727f95;font-size:13px}}
+.info-value{{height:14px;width:55%;border-radius:7px;background:rgba(148,163,184,.08)}}
+.fake-status{{margin-top:18px;height:40px;border-radius:12px;background:rgba(8,12,21,.70);border:1px solid rgba(125,145,190,.12)}}
+
+/* 40% dim + blur, with the popup remaining sharp */
+.error-overlay{{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;overflow:hidden;background:rgba(0,0,0,.40);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}}
+.error-overlay::before{{content:"";position:absolute;inset:-25%;pointer-events:none;opacity:.58;background:
+radial-gradient(ellipse 3px 9px at 7% 18%,rgba(255,255,255,.48),transparent 70%),
+radial-gradient(ellipse 2px 7px at 18% 72%,rgba(190,225,255,.38),transparent 70%),
+radial-gradient(ellipse 3px 10px at 31% 34%,rgba(255,255,255,.34),transparent 70%),
+radial-gradient(ellipse 2px 7px at 43% 84%,rgba(190,225,255,.42),transparent 70%),
+radial-gradient(ellipse 3px 10px at 55% 20%,rgba(255,255,255,.36),transparent 70%),
+radial-gradient(ellipse 2px 8px at 68% 63%,rgba(190,225,255,.40),transparent 70%),
+radial-gradient(ellipse 3px 9px at 80% 31%,rgba(255,255,255,.38),transparent 70%),
+radial-gradient(ellipse 2px 7px at 92% 78%,rgba(190,225,255,.40),transparent 70%);
+filter:blur(.25px);animation:rainDrift 7s linear infinite}}
+.error-overlay::after{{content:"";position:absolute;inset:0;pointer-events:none;opacity:.16;background:repeating-linear-gradient(102deg,transparent 0 46px,rgba(190,225,255,.22) 47px,transparent 49px 92px);animation:rainSlide 1.8s linear infinite}}
+@keyframes rainDrift{{from{{transform:translateY(-2%)}}to{{transform:translateY(2%)}}}}
+@keyframes rainSlide{{from{{transform:translateY(-45px)}}to{{transform:translateY(45px)}}}}
+.error-modal{{position:relative;z-index:2;width:min(360px,calc(100vw - 34px));border:1px solid rgba(255,255,255,.20);border-radius:22px;background:linear-gradient(145deg,rgba(36,42,54,.72),rgba(10,14,23,.82));box-shadow:0 28px 90px rgba(0,0,0,.66),0 0 65px rgba(255,45,75,.12),inset 0 1px 0 rgba(255,255,255,.10);backdrop-filter:blur(20px) saturate(125%);-webkit-backdrop-filter:blur(20px) saturate(125%);padding:28px 22px 23px;text-align:center;overflow:hidden}}
+.error-modal::before{{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(125deg,rgba(255,255,255,.10),transparent 24%,transparent 72%,rgba(255,255,255,.035));border-radius:inherit}}
+.error-modal::after{{content:"";position:absolute;left:12%;right:12%;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.42),transparent);opacity:.7}}
+.error-icon{{position:relative;z-index:1;width:58px;height:58px;margin:0 auto 2px;display:grid;place-items:center;color:#ff5265;font-size:49px;line-height:1;text-shadow:0 0 18px rgba(255,55,75,.72)}}
+.error-code{{position:relative;z-index:1;margin:0;font-size:64px;line-height:1;font-weight:850;letter-spacing:3px;background:linear-gradient(180deg,rgba(255,255,255,.94) 0%,rgba(255,112,128,.92) 38%,rgba(255,48,72,.78) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;text-shadow:0 0 10px rgba(255,70,90,.28),0 8px 26px rgba(0,0,0,.28);filter:drop-shadow(0 0 10px rgba(255,55,75,.22))}}
+.error-title{{position:relative;z-index:1;margin:15px 0 0;color:rgba(245,247,252,.92);font-size:15px;letter-spacing:4px;font-weight:500;text-shadow:0 1px 8px rgba(255,255,255,.08)}}
+.error-divider{{position:relative;z-index:1;width:165px;height:1px;margin:13px auto 12px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.28),transparent)}}
+.error-message{{position:relative;z-index:1;margin:0 auto;color:#b6bcc8;font-size:13px;line-height:1.7;max-width:285px}}
+.home-btn{{position:relative;z-index:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:170px;margin-top:21px;padding:11px 18px;border:1px solid rgba(255,255,255,.18);border-radius:12px;background:linear-gradient(180deg,rgba(30,36,50,.70),rgba(12,17,28,.72));color:#e8ebf2;text-decoration:none;font-size:13px;font-weight:600;box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 8px 24px rgba(0,0,0,.18);transition:.18s ease}}
+.home-btn:hover{{background:rgba(40,47,63,.82);transform:translateY(-1px);border-color:rgba(255,255,255,.30)}}
+@media(max-width:650px){{.watch-page{{width:calc(100% - 20px);padding-top:16px}}.watch-brand{{font-size:19px}}.watch-status{{font-size:10px;padding:7px 9px}}.media-card{{border-radius:18px}}.poster{{min-height:205px}}.poster-play{{width:70px;height:70px;font-size:27px}}.action-grid{{grid-template-columns:1fr}}.info-row{{grid-template-columns:1fr;gap:6px;padding:13px 16px}}.error-modal{{width:min(350px,calc(100vw - 28px));padding:25px 18px 20px}}.error-code{{font-size:55px}}}}
+
+/* ============================================================
+   REALISTIC GLASS RAIN — canvas layer, replaces the earlier
+   simple CSS raindrops. Sits above the whole card.
+   ============================================================ */
+.rain-canvas{{position:fixed;inset:0;z-index:5;pointer-events:none}}
+</style>
+</head>
+<body>
+<main class="watch-page" aria-hidden="true">
+<header class="watch-header">
+<div class="watch-brand">STADY-<span>PROXY</span></div>
+<div class="watch-status"><i></i> ONLINE</div>
+</header>
+<section class="media-card">
+<div class="poster"><div class="poster-play">▶</div></div>
+<div class="file-title-card"><div class="skeleton-title"></div><div class="skeleton-sub"></div></div>
+</section>
+<div class="action-grid"><div class="action-btn">⇩ Download File</div><div class="action-btn">⛓ Copy Share Link</div></div>
+<div class="action-grid"><div class="action-btn">🎬 External Players</div></div>
+<section class="info-card">
+<div class="info-head">▣ File Information</div>
+<div class="info-row"><div class="info-label">File Name</div><div class="info-value"></div></div>
+<div class="info-row"><div class="info-label">File Size</div><div class="info-value"></div></div>
+<div class="info-row"><div class="info-label">File Owner</div><div class="info-value"></div></div>
+</section>
+<div class="fake-status"></div>
+</main>
+<div class="error-overlay" role="dialog" aria-modal="true" aria-labelledby="errorTitle">
+<section class="error-modal">
+<div class="error-icon">⚠</div>
+<h1 class="error-code">404</h1>
+<div id="errorTitle" class="error-title">PAGE NOT FOUND</div>
+<div class="error-divider"></div>
+<p class="error-message">The page you are looking for doesn't exist<br>or may have been moved.</p>
+<a class="home-btn" href="/">⌂&nbsp; RETURN HOME</a>
+</section>
+<canvas id="stadyRainCanvas" class="rain-canvas"></canvas>
+</div>
+""" """
+<script>
+(function(){
+    var canvas = document.getElementById('stadyRainCanvas');
+    if (!canvas || !canvas.getContext) return;
+    var ctx = canvas.getContext('2d');
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var W = 0, H = 0;
+
+    function resize() {
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = W + 'px';
+        canvas.style.height = H + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function Drop(w, h) {
+        this.reset(w, h, true);
+    }
+
+    Drop.prototype.reset = function (w, h, initial) {
+        this.x = Math.random() * w;
+        this.y = initial ? Math.random() * h : -30 - Math.random() * 120;
+        this.r = 1.8 + Math.random() * Math.random() * 12;
+        this.wobbleSeed = Math.random() * 1000;
+        this.sliding = initial ? Math.random() < 0.3 : false;
+        this.vy = this.sliding ? 0.15 + Math.random() * 0.4 : 0;
+        this.trail = [];
+        this.age = 0;
+        this.formDelay = 400 + Math.random() * 5000;
+        this.maxTrail = 26 + Math.floor(Math.random() * 46);
+    };
+
+    Drop.prototype.update = function (dt, w, h) {
+        this.age += dt;
+        if (!this.sliding) {
+            if (this.r > 6 && this.age > this.formDelay && Math.random() < 0.0009 * dt) {
+                this.sliding = true;
+                this.vy = 0.05;
+            }
+            return;
+        }
+        this.vy = Math.min(this.vy + 0.0008 * dt, 0.55 + this.r * 0.045);
+        var wobble = Math.sin(this.y * 0.045 + this.wobbleSeed) * 0.5;
+        this.x += wobble * dt * 0.02;
+        this.y += this.vy * dt * 0.06;
+        this.trail.push({ x: this.x, y: this.y, r: this.r * 0.48 });
+        if (this.trail.length > this.maxTrail) this.trail.shift();
+        if (this.y - this.r > h) this.reset(w, h, false);
+    };
+
+    Drop.prototype.draw = function (ctx) {
+        var i, p, progress;
+        if (this.trail.length > 1) {
+            for (i = 0; i < this.trail.length; i++) {
+                p = this.trail[i];
+                progress = i / this.trail.length;
+                ctx.globalAlpha = progress * 0.20;
+                ctx.beginPath();
+                ctx.ellipse(p.x, p.y, Math.max(0.4, p.r * progress), Math.max(1.1, p.r * 1.35 * progress), 0, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(205,222,245,0.9)';
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+        var r = this.r;
+        var grad = ctx.createRadialGradient(this.x - r * 0.3, this.y - r * 0.35, r * 0.15, this.x, this.y, r);
+        grad.addColorStop(0, 'rgba(255,255,255,0.70)');
+        grad.addColorStop(0.35, 'rgba(210,225,240,0.26)');
+        grad.addColorStop(0.75, 'rgba(140,160,185,0.13)');
+        grad.addColorStop(1, 'rgba(20,25,35,0.04)');
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(this.x + r * 0.22, this.y + r * 0.28, r * 0.86, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+        ctx.lineWidth = Math.max(0.4, r * 0.10);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.ellipse(this.x - r * 0.32, this.y - r * 0.38, r * 0.26, r * 0.15, -0.6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.80)';
+        ctx.fill();
+    };
+
+    resize();
+    window.addEventListener('resize', resize);
+
+    var DROP_COUNT = Math.max(60, Math.min(150, Math.floor((W * H) / 8500)));
+    var drops = [];
+    for (var i = 0; i < DROP_COUNT; i++) drops.push(new Drop(W, H));
+
+    var last = performance.now();
+    function frame(now) {
+        var dt = Math.min(now - last, 48);
+        last = now;
+        ctx.clearRect(0, 0, W, H);
+        for (var i = 0; i < drops.length; i++) {
+            drops[i].update(dt, W, H);
+            drops[i].draw(ctx);
+        }
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>"""
+
 def get_file(token):
 
     with db_connect() as db:
@@ -1968,9 +2164,13 @@ async def watch(token):
     row = get_file(token)
 
     if not row:
+        # Keep the user on the same /watch/{token} URL and render the
+        # 404 popup over a STADY-PROXY watch-style background instead of
+        # sending them to a separate 404 document/page.
         return HTMLResponse(
             content=stady_error_page(),
-            status_code=404
+            status_code=404,
+            headers={"Cache-Control": "no-store"}
         )
 
     filename = row["filename"]
@@ -2805,443 +3005,4 @@ async def direct_proxy(
 
         metric_inc("streams_started")
         file_semaphore = (
-            await get_file_stream_semaphore(token)
-        )
-
-        global_acquired = False
-        file_acquired = False
-
-        try:
-            try:
-                await asyncio.wait_for(
-                    global_stream_semaphore.acquire(),
-                    timeout=STREAM_ACQUIRE_TIMEOUT
-                )
-                global_acquired = True
-
-                await asyncio.wait_for(
-                    file_semaphore.acquire(),
-                    timeout=STREAM_ACQUIRE_TIMEOUT
-                )
-                file_acquired = True
-
-            except asyncio.TimeoutError:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Too many active streams. "
-                        "Please try again shortly."
-                    ),
-                    headers={
-                        "Retry-After": str(
-                            STREAM_ACQUIRE_TIMEOUT
-                        )
-                    }
-                )
-
-            try:
-                # IMPORTANT: stream directly from Telegram instead of waiting for a
-                # complete 4 MB cache chunk. This lets browsers receive the first
-                # bytes immediately and seek progressively with HTTP Range.
-                async for chunk in telegram_stream(
-                    message=message, offset=start, length=length
-                ):
-                    yield chunk
-                metric_inc("streams_completed")
-            except asyncio.CancelledError:
-                metric_inc("stream_disconnects")
-                raise
-            except Exception:
-                metric_inc("streams_failed")
-                raise
-
-        finally:
-            if file_acquired:
-                file_semaphore.release()
-
-            if global_acquired:
-                global_stream_semaphore.release()
-
-            await remove_file_stream_semaphore(token)
-    content_disposition = (
-        f'attachment; filename="{quote(real_filename)}"'
-        if action == "download"
-        else f'inline; filename="{quote(real_filename)}"'
-    )
-
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(length),
-        "Content-Disposition": content_disposition,
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Pragma": "no-cache",
-        "X-Content-Type-Options": "nosniff",
-    }
-
-    if range_header:
-        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-    return StreamingResponse(
-        stream_generator(),
-        status_code=(
-            206
-            if range_header
-            else 200
-        ),
-        media_type=mime,
-        headers=headers
-    )
-    
-@app.get("/metrics")
-async def metrics():
-    with metrics_lock:
-        snapshot = dict(server_metrics)
-    snapshot["active_stream_slots"] = MAX_CONCURRENT_STREAMS - global_stream_semaphore._value
-    snapshot["active_telegram_downloads"] = MAX_CONCURRENT_TELEGRAM_DOWNLOADS - telegram_download_semaphore._value
-    snapshot["cache_active_chunks"] = len(cache_active_files)
-    snapshot["cache_locks"] = len(cache_locks)
-    snapshot["rate_limit_keys"] = len(request_rate_state)
-    return snapshot
-
-
-# ============================================================
-# 12-HOUR AUTO CLEANUP
-# ============================================================
-
-async def cleanup_expired_files():
-
-    while True:
-
-        try:
-
-            expired_files = []
-
-            with db_connect() as db:
-
-                with db.cursor() as cursor:
-
-                    cursor.execute("""
-                        SELECT
-                            token,
-                            bot_chat_id,
-                            bot_message_id
-                        FROM files
-                        WHERE expires_at IS NOT NULL
-                        AND expires_at <= NOW()
-                    """)
-
-                    expired_files = cursor.fetchall()
-
-            for row in expired_files:
-
-                token = row["token"]
-                bot_chat_id = row["bot_chat_id"]
-                bot_message_id = row["bot_message_id"]
-
-                if bot_chat_id and bot_message_id:
-
-                    try:
-
-                        await bot.delete_messages(
-                            int(bot_chat_id),
-                            int(bot_message_id)
-                        )
-
-                    except Exception as error:
-
-                        print(
-                            "[CLEANUP] "
-                            "Telegram message delete failed:",
-                            error
-                        )
-
-                with db_connect() as db:
-
-                    with db.cursor() as cursor:
-
-                        cursor.execute("""
-                            DELETE FROM files
-                            WHERE token = %s
-                        """, (
-                            token,
-                        ))
-
-                    db.commit()
-
-                remove_cache_token(token)
-
-                print(
-                    "[CLEANUP] Expired file removed:",
-                    token
-                )
-
-        except Exception as error:
-
-            print(
-                "[CLEANUP] Error:",
-                error
-            )
-
-        await asyncio.sleep(60)
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-async def main():
-
-    global BOT_USERNAME
-
-    init_database()
-
-    print()
-
-    print("=" * 65)
-
-    print(
-        "       TELEGRAM DIRECT PROXY — STADY-PROXY"
-    )
-
-    print("=" * 65)
-
-    print(
-        "\n[+] Connecting to Telegram..."
-    )
-
-    await bot.start(
-        bot_token=BOT_TOKEN
-    )
-
-    me = await bot.get_me()
-
-    BOT_USERNAME = (
-        me.username
-        if me.username
-        else str(me.id)
-    )
-
-    print(
-        "[+] Telegram connected"
-    )
-
-    print(
-        f"[+] Bot: @{BOT_USERNAME}"
-    )
-
-    print(
-        "[+] BOT MODE: "
-        + ("ENABLED (RAMNAYCLOUD)" if BOT_MODE
-           else "DISABLED (RENDER WEB/STREAM ONLY)")
-    )
-
-    print(
-        "[+] Telegram updates: "
-        + ("ENABLED" if BOT_MODE else "DISABLED")
-    )
-
-    print(
-        f"[+] Public URL: {PUBLIC_URL}"
-    )
-
-    print(
-        f"[+] Local URL: http://127.0.0.1:{PORT}"
-    )
-
-    print(
-        "[+] Server ready"
-    )
-
-    print("=" * 65)
-
-    config = uvicorn.Config(
-        app,
-        host=HOST,
-        port=PORT,
-        loop="asyncio",
-        log_level="info"
-    )
-
-    server = uvicorn.Server(config)
-
-    cleanup_task = None
-
-    if BOT_MODE:
-        cleanup_task = asyncio.create_task(
-            cleanup_expired_files()
-        )
-
-    cache_cleanup_task = asyncio.create_task(
-        cleanup_cache_loop()
-    )
-
-    try:
-
-        await server.serve()
-
-    finally:
-
-        if cleanup_task is not None:
-            cleanup_task.cancel()
-
-            try:
-                await cleanup_task
-            except asyncio.CancelledError:
-                pass
-
-        cache_cleanup_task.cancel()
-
-        try:
-            await cache_cleanup_task
-        except asyncio.CancelledError:
-            pass
-
-        print(
-            "[+] Disconnecting Telegram..."
-        )
-
-        await bot.disconnect()
-
-
-if __name__ == "__main__":
-
-    try:
-
-        asyncio.run(main())
-
-    except KeyboardInterrupt:
-
-        print(
-            "\n[+] Server stopped."
-)
-
-
-# ============================================================
-# SERVER SECURITY V3 INTEGRATION — APPEND ONLY
-# ============================================================
-# Shared PostgreSQL state lets the security bot enforce blocks and
-# lockdown even when the two services run as separate processes.
-
-SECURITY_V3_SERVER_ENABLED = os.getenv("SECURITY_V3_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
-SECURITY_V3_SERVER_CACHE_TTL = max(2, float(os.getenv("SECURITY_V3_SERVER_CACHE_TTL", "5")))
-SECURITY_V3_SERVER_MAX_STREAMS_PER_USER = max(1, int(os.getenv("SECURITY_V3_SERVER_MAX_STREAMS_PER_USER", "5")))
-security_v3_server_state = {"lockdown": False, "lockdown_checked": 0.0}
-security_v3_server_user_streams = {}
-security_v3_server_lock = threading.Lock()
-
-
-def security_v3_server_control_state():
-    now = time.monotonic()
-    if now - security_v3_server_state["lockdown_checked"] < SECURITY_V3_SERVER_CACHE_TTL:
-        return security_v3_server_state["lockdown"]
-    try:
-        with db_connect() as db:
-            with db.cursor() as cursor:
-                cursor.execute("SELECT lockdown FROM security_v3_control WHERE id=1")
-                row = cursor.fetchone()
-        value = bool(row and row.get("lockdown"))
-        security_v3_server_state["lockdown"] = value
-        security_v3_server_state["lockdown_checked"] = now
-        return value
-    except Exception as error:
-        # Fail open on control-plane DB errors so an accidental security DB outage
-        # does not take down normal playback. Existing rate limits still apply.
-        print("[SECURITY V3] Control-state check failed:", error)
-        return False
-
-
-def security_v3_server_temp_blocked(user_id):
-    try:
-        with db_connect() as db:
-            with db.cursor() as cursor:
-                cursor.execute(
-                    "SELECT 1 FROM security_v3_temp_blocks WHERE user_id=%s AND expires_at > NOW()",
-                    (int(user_id),)
-                )
-                return cursor.fetchone() is not None
-    except Exception as error:
-        print("[SECURITY V3] Temp-block check failed:", error)
-        return False
-
-
-def security_v3_server_log_access(chat_id, ip, action, token=None, status_code=200):
-    try:
-        with db_connect() as db:
-            with db.cursor() as cursor:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS access_logs (
-                        id BIGSERIAL PRIMARY KEY,
-                        chat_id BIGINT,
-                        ip TEXT,
-                        action TEXT,
-                        token TEXT,
-                        status_code INTEGER,
-                        accessed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                    )
-                """)
-                cursor.execute("""
-                    INSERT INTO access_logs(chat_id, ip, action, token, status_code, accessed_at)
-                    VALUES (%s, %s, %s, %s, %s, NOW())
-                """, (int(chat_id) if chat_id is not None else 0, str(ip or "unknown"), str(action), token, int(status_code)))
-            db.commit()
-    except Exception as error:
-        print("[SECURITY V3] access log failed:", error)
-
-
-def security_v3_server_user_id_from_token(token):
-    try:
-        with db_connect() as db:
-            with db.cursor() as cursor:
-                cursor.execute("SELECT chat_id FROM files WHERE token=%s", (token,))
-                row = cursor.fetchone()
-        return int(row["chat_id"]) if row and row.get("chat_id") is not None else 0
-    except Exception:
-        return 0
-
-
-async def security_v3_server_middleware(request, call_next):
-    if not SECURITY_V3_SERVER_ENABLED:
-        return await call_next(request)
-    path = request.url.path
-    client_ip = request.client.host if request.client else "unknown"
-    token = None
-    action = "request"
-    parts = path.strip("/").split("/")
-    if parts and parts[0] and parts[0] not in {"health", "metrics", "share", "receive", "pair", "stady-proxy-404.png"}:
-        token = parts[0]
-    user_id = security_v3_server_user_id_from_token(token) if token else 0
-    if user_id and security_v3_server_temp_blocked(user_id):
-        metric_inc("rate_limited")
-        security_v3_server_log_access(user_id, client_ip, "blocked", token, 403)
-        return JSONResponse({"ok": False, "error": "Access temporarily blocked"}, status_code=403)
-    if path.startswith("/share/") or (token and path.count("/") >= 2):
-        action = "stream"
-        if security_v3_server_control_state():
-            security_v3_server_log_access(user_id, client_ip, "lockdown", token, 503)
-            return JSONResponse({"ok": False, "error": "Proxy is temporarily in security lockdown"}, status_code=503)
-        if user_id:
-            with security_v3_server_lock:
-                active = security_v3_server_user_streams.get(user_id, 0)
-                if active >= SECURITY_V3_SERVER_MAX_STREAMS_PER_USER:
-                    security_v3_server_log_access(user_id, client_ip, "stream", token, 429)
-                    return JSONResponse({"ok": False, "error": "Too many active streams", "retry_after": 15}, status_code=429)
-                security_v3_server_user_streams[user_id] = active + 1
-    try:
-        response = await call_next(request)
-        if user_id:
-            security_v3_server_log_access(user_id, client_ip, action, token, response.status_code)
-        return response
-    finally:
-        if user_id and action == "stream":
-            with security_v3_server_lock:
-                current = security_v3_server_user_streams.get(user_id, 1) - 1
-                if current > 0:
-                    security_v3_server_user_streams[user_id] = current
-                else:
-                    security_v3_server_user_streams.pop(user_id, None)
-
-
-# Register V3 middleware additively after the original middleware function definitions.
-try:
-    app.middleware("http")(security_v3_server_middleware)
-except Exception as error:
-    print("[SECURITY V3] Middleware registration failed:", error)
+            await get_fil
