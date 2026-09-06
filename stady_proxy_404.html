@@ -51,6 +51,23 @@ body {
     padding: 0;
 }
 
+.unavailable-message{
+    position:absolute;
+    left:50%;
+    top:39%;
+    transform:translate(-50%,-50%);
+    width:80%;
+    text-align:center;
+    color:#fff;
+    font-family:Arial,sans-serif;
+    font-size:clamp(16px,3.8vw,25px);
+    font-weight:700;
+    line-height:1.3;
+    text-shadow:0 0 8px #00eaff,0 0 16px rgba(255,24,213,.8);
+    pointer-events:none;
+    z-index:2;
+}
+
 @media (min-width: 692px) {
     .error-page {
         box-shadow: 0 0 45px rgba(0, 238, 255, .16);
@@ -139,6 +156,7 @@ body {
 
 <body>
 <main class="error-page">
+    <div class="unavailable-message" role="alert">Sorry! This file is currently unavailable.</div>
     
 <div class="spark-layer" aria-hidden="true">
     <i class="spark" style="left:18%;top:27%;animation-delay:.15s"></i>
@@ -164,9 +182,10 @@ body {
     <!-- Invisible clickable area over the exact RETURN HOME button -->
     <a
         class="return-home"
-        href="https://t.me/Myreithuentebot"
+        href="https://t.me/AdolfFTLbot?start=unavailable"
         aria-label="Return Home"
     ></a>
 </main>
 </body>
 </html>
+

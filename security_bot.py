@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 
 # ============================================================
 # CONFIG
@@ -340,6 +340,193 @@ def purge_user_files(user_id):
 
         return 0
 
+# ============================================================
+# REMOVE FUNCTIONS
+# ============================================================
+
+def remove_user_data(user_id):
+
+    try:
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                # Get tokens first
+                cursor.execute(
+                    """
+                    SELECT token
+                    FROM files
+                    WHERE chat_id = %s
+                    """,
+                    (int(user_id),)
+                )
+
+                rows = cursor.fetchall()
+
+                tokens = [
+                    str(row["token"])
+                    for row in rows
+                ]
+
+                # Remove access history for this user
+                cursor.execute(
+                    """
+                    DELETE FROM access_logs
+                    WHERE chat_id = %s
+                    """,
+                    (int(user_id),)
+                )
+
+                # Remove all generated file/link records
+                cursor.execute(
+                    """
+                    DELETE FROM files
+                    WHERE chat_id = %s
+                    """,
+                    (int(user_id),)
+                )
+
+                removed = cursor.rowcount
+
+            db.commit()
+
+            return removed
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] Remove user error:",
+            error
+        )
+
+        raise
+
+
+def remove_token_data(token):
+
+    try:
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        token,
+                        chat_id,
+                        filename
+                    FROM files
+                    WHERE token = %s
+                    """,
+                    (token,)
+                )
+
+                row = cursor.fetchone()
+
+                if not row:
+
+                    return None
+
+                cursor.execute(
+                    """
+                    DELETE FROM access_logs
+                    WHERE token = %s
+                    """,
+                    (token,)
+                )
+
+                cursor.execute(
+                    """
+                    DELETE FROM files
+                    WHERE token = %s
+                    """,
+                    (token,)
+                )
+
+                removed = cursor.rowcount
+
+            db.commit()
+
+            return {
+                "removed": removed,
+                "chat_id": row["chat_id"],
+                "filename": row["filename"],
+                "token": row["token"]
+            }
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] Remove token error:",
+            error
+        )
+
+        raise
+
+def remove_user_files(user_id):
+
+    try:
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    DELETE FROM files
+                    WHERE chat_id = %s
+                    """,
+                    (int(user_id),)
+                )
+
+                removed = cursor.rowcount
+
+            db.commit()
+
+            return removed
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] Remove user error:",
+            error
+        )
+
+        return -1
+
+
+def remove_file_by_token(token):
+    try:
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    DELETE FROM files
+                    WHERE token = %s
+                    """,
+                    (token,)
+                )
+
+                removed = cursor.rowcount
+
+            db.commit()
+
+            return removed
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] Remove token error:",
+            error
+        )
+
+        return -1
+
 def purge_all_blocked_users():
 
     blocked = get_blocked_users()
@@ -360,7 +547,6 @@ def purge_all_blocked_users():
 
     return total_removed
 
-        
 
 # ============================================================
 # ADMIN CHECK
@@ -376,6 +562,60 @@ def is_admin(event):
 
         return False
 
+# ============================================================
+# INTERACTIVE ADMIN ACTIONS
+# ============================================================
+
+pending_actions = {}
+
+
+def set_pending_action(user_id, action):
+    pending_actions[int(user_id)] = action
+
+
+def get_pending_action(user_id):
+    return pending_actions.get(int(user_id))
+
+
+def clear_pending_action(user_id):
+    pending_actions.pop(int(user_id), None)
+
+
+async def cancel_pending_action(event):
+    clear_pending_action(event.sender_id)
+
+    await event.reply(
+        "❌ <b>Action cancelled.</b>",
+        parse_mode="html"
+    )
+
+
+async def confirm_action(event, action, value):
+
+    if not is_admin(event):
+        return
+
+    buttons = [
+        [
+            Button.inline(
+                "✅ Confirm",
+                data=f"confirm:{action}:{value}".encode()
+            ),
+            Button.inline(
+                "❌ Cancel",
+                data=b"cancel_action"
+            )
+        ]
+    ]
+
+    await event.reply(
+        "⚠️ <b>CONFIRM ACTION</b>\n\n"
+        f"Action: <code>{html.escape(action)}</code>\n"
+        f"Target: <code>{html.escape(str(value))}</code>\n\n"
+        "Are you sure?",
+        buttons=buttons,
+        parse_mode="html"
+    )
 
 # ============================================================
 # /START
@@ -406,6 +646,10 @@ async def start_command(event):
 
         "🔎 <code>/inspect USER_ID</code>\n"
         "View a user's active files.\n\n"
+        "🗑️ <code>/remove USER_ID</code>\n"
+       "Remove all generated links for a user.\n\n"
+         "🗑️ <code>/remove TOKEN</code>\n"
+         "Remove one generated link.\n\n"
 
         "🚫 <code>/block USER_ID reason</code>\n"
         "Block a user and revoke their links.\n\n"
@@ -503,14 +747,13 @@ async def users_command(event):
         parse_mode="html"
     )
 
-
 # ============================================================
 # /INSPECT
 # ============================================================
 
 @security_bot.on(
     events.NewMessage(
-        pattern=r"^/inspect\s+(\d+)$"
+        pattern=r"^/inspect(?:\s+(\d+))?$"
     )
 )
 async def inspect_command(event):
@@ -518,72 +761,788 @@ async def inspect_command(event):
     if not is_admin(event):
         return
 
-    user_id = int(
-        event.pattern_match.group(1)
-    )
+    match = event.pattern_match
 
-    files = get_user_files(
-        user_id
-    )
+    # --------------------------------------------------------
+    # /inspect without USER_ID → ask
+    # --------------------------------------------------------
 
-    status = (
-        "🚫 BLOCKED"
-        if is_blocked(user_id)
-        else "✅ ACTIVE"
-    )
+    if not match.group(1):
 
-    if not files:
+        set_pending_action(
+            event.sender_id,
+            "inspect"
+        )
 
         await event.reply(
             "🔎 <b>USER INSPECTION</b>\n\n"
-            f"User ID: <code>{user_id}</code>\n"
-            f"Status: {status}\n\n"
-            "📭 No active files.",
+            "Send the <b>Telegram User ID</b> you want to inspect.\n\n"
+            "Example:\n"
+            "<code>8540425480</code>\n\n"
+            "Use /cancel to cancel.",
             parse_mode="html"
         )
 
         return
 
-    lines = [
-        "╭━━━━━━━━━━━━━━━━━━━━━━╮",
-        "       🔎 USER INSPECTION",
-        "╰━━━━━━━━━━━━━━━━━━━━━━╯",
-        "",
-        f"👤 User ID: <code>{user_id}</code>",
-        f"Status: {status}",
-        f"📦 Files: <code>{len(files)}</code>",
-        ""
-    ]
-
-    for row in files[:30]:
-
-        filename = html.escape(
-            str(row["filename"])
-        )
-
-        size = int(
-            row["size"] or 0
-        )
-
-        size_mb = (
-            size / 1024 / 1024
-        )
-
-        token = str(
-            row["token"]
-        )
-
-        lines.append(
-            f"📄 <b>{filename}</b>\n"
-            f"   Size: <code>{size_mb:.2f} MB</code>\n"
-            f"   Token: <code>{token}</code>\n"
-        )
-
-    await event.reply(
-        "\n".join(lines),
-        parse_mode="html"
+    user_id = int(
+        match.group(1)
     )
 
+    await perform_inspect(
+        event,
+        user_id
+    )
+
+
+async def perform_inspect(event, user_id):
+
+    try:
+
+        files = get_user_files(
+            user_id
+        )
+
+        status = (
+            "🚫 BLOCKED"
+            if is_blocked(user_id)
+            else "✅ ACTIVE"
+        )
+
+        with files_pg_db() as db:
+
+            with db.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        token,
+                        filename,
+                        action,
+                        ip,
+                        user_agent,
+                        accessed_at
+                    FROM access_logs
+                    WHERE chat_id = %s
+                    ORDER BY accessed_at DESC
+                    LIMIT 100
+                    """,
+                    (int(user_id),)
+                )
+
+                history = cursor.fetchall()
+
+        if not files and not history:
+
+            await event.reply(
+                "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                "       🔎 USER INSPECTION\n"
+                "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                f"👤 User ID: <code>{user_id}</code>\n"
+                f"Status: {status}\n\n"
+                "📭 No files or access history found.",
+                parse_mode="html"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Telegram messages have a size limit.
+        # Send files/history separately.
+        # ----------------------------------------------------
+
+        await event.reply(
+            "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+            "       🔎 USER INSPECTION\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+            f"👤 User ID: <code>{user_id}</code>\n"
+            f"Status: {status}\n"
+            f"📦 Files: <code>{len(files)}</code>\n"
+            f"📊 Logged requests: <code>{len(history)}</code>",
+            parse_mode="html"
+        )
+
+        # ----------------------------------------------------
+        # FILES
+        # ----------------------------------------------------
+
+        if files:
+
+            file_lines = [
+                "📦 <b>ACTIVE FILES</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ]
+
+            for index, row in enumerate(
+                files,
+                start=1
+            ):
+
+                filename = html.escape(
+                    str(row["filename"] or "Unknown")
+                )
+
+                token = html.escape(
+                    str(row["token"] or "")
+                )
+
+                size = int(
+                    row["size"] or 0
+                )
+
+                if size >= 1024 ** 3:
+
+                    size_text = (
+                        f"{size / 1024 ** 3:.2f} GB"
+                    )
+
+                elif size >= 1024 ** 2:
+
+                    size_text = (
+                        f"{size / 1024 ** 2:.2f} MB"
+                    )
+
+                elif size >= 1024:
+
+                    size_text = (
+                        f"{size / 1024:.2f} KB"
+                    )
+
+                else:
+
+                    size_text = f"{size} B"
+
+                block = (
+                    f"\n<b>{index}. {filename}</b>\n"
+                    f"📦 Size: <code>{size_text}</code>\n"
+                    f"🔑 Token: <code>{token}</code>\n"
+                )
+
+                # Prevent Telegram message overflow.
+                if (
+                    len("\n".join(file_lines))
+                    + len(block)
+                    > 3500
+                ):
+
+                    await event.reply(
+                        "\n".join(file_lines),
+                        parse_mode="html"
+                    )
+
+                    file_lines = []
+
+                file_lines.append(
+                    block
+                )
+
+            if file_lines:
+
+                await event.reply(
+                    "\n".join(file_lines),
+                    parse_mode="html"
+                )
+
+        # ----------------------------------------------------
+        # ACCESS HISTORY
+        # ----------------------------------------------------
+
+        if history:
+
+            history_lines = [
+                "📊 <b>ACCESS HISTORY</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ]
+
+            for row in history:
+
+                filename = html.escape(
+                    str(row["filename"] or "Unknown")
+                )
+
+                action = (
+                    str(row["action"] or "unknown")
+                    .lower()
+                )
+
+                ip = html.escape(
+                    str(row["ip"] or "Unknown")
+                )
+
+                accessed_at = html.escape(
+                    str(row["accessed_at"] or "Unknown")
+                )
+
+                if action == "watch":
+
+                    icon = "👁️"
+                    action_name = "WATCH PAGE"
+
+                elif action == "stream":
+
+                    icon = "▶️"
+                    action_name = "STREAM"
+
+                elif action == "download":
+
+                    icon = "📥"
+                    action_name = "DOWNLOAD"
+
+                else:
+
+                    icon = "❔"
+                    action_name = action.upper()
+
+                block = (
+                    f"\n{icon} <b>{action_name}</b>\n"
+                    f"🎬 {filename}\n"
+                    f"🌐 IP: <code>{ip}</code>\n"
+                    f"🕐 <code>{accessed_at}</code>\n"
+                )
+
+                if (
+                    len("\n".join(history_lines))
+                    + len(block)
+                    > 3500
+                ):
+
+                    await event.reply(
+                        "\n".join(history_lines),
+                        parse_mode="html"
+                    )
+
+                    history_lines = []
+
+                history_lines.append(
+                    block
+                )
+
+            if history_lines:
+
+                await event.reply(
+                    "\n".join(history_lines),
+                    parse_mode="html"
+                )
+    except Exception as error:
+
+        print(
+            "[SECURITY] Inspect error:",
+            error
+        )
+
+        await event.reply(
+            "❌ <b>Inspect failed</b>\n\n"
+            f"<code>{html.escape(str(error))}</code>",
+            parse_mode="html"
+        )
+
+# ============================================================
+# /REMOVE
+# ============================================================
+
+@security_bot.on(
+    events.NewMessage(
+        pattern=r"^/remove(?:\s+(.+))?$"
+    )
+)
+async def remove_command(event):
+
+    if not is_admin(event):
+        return
+
+    match = event.pattern_match
+
+    # --------------------------------------------------------
+    # /remove → ask
+    # --------------------------------------------------------
+
+    if not match.group(1):
+
+        set_pending_action(
+            event.sender_id,
+            "remove"
+        )
+
+        await event.reply(
+            "🗑️ <b>REMOVE DATA</b>\n\n"
+            "Send either:\n\n"
+            "👤 <b>User ID</b> — remove ALL generated "
+            "links/files for that user.\n\n"
+            "🔑 <b>Token</b> — remove ONLY that generated "
+            "file/link.\n\n"
+            "Example User ID:\n"
+            "<code>8540425480</code>\n\n"
+            "Example Token:\n"
+            "<code>fd47579b090041028a6073c8ee6835cd</code>\n\n"
+            "Use /cancel to cancel.",
+            parse_mode="html"
+        )
+
+        return
+
+    value = match.group(1).strip()
+
+    await prepare_remove(
+        event,
+        value
+    )
+
+
+async def prepare_remove(event, value):
+
+    # --------------------------------------------------------
+    # USER ID
+    # --------------------------------------------------------
+
+    if value.isdigit():
+
+        user_id = int(value)
+
+        set_pending_action(
+            event.sender_id,
+            f"remove_user:{user_id}"
+        )
+
+        await confirm_action(
+            event,
+            "remove_user",
+            user_id
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # TOKEN
+    # --------------------------------------------------------
+
+    if (
+        len(value) == 32
+        and all(
+            c in "0123456789abcdefABCDEF"
+            for c in value
+        )
+    ):
+
+        token = value
+
+        set_pending_action(
+            event.sender_id,
+            f"remove_token:{token}"
+        )
+
+        await confirm_action(
+            event,
+            "remove_token",
+            token
+        )
+
+        return
+
+    await event.reply(
+        "❌ <b>Invalid input.</b>\n\n"
+        "Send either a numeric User ID or a valid 32-character token.",
+        parse_mode="html"
+    )
+# ============================================================
+# CONFIRMATION CALLBACKS
+# ============================================================
+
+@security_bot.on(
+    events.CallbackQuery(
+        pattern=rb"^confirm:"
+    )
+)
+async def confirm_callback(event):
+
+    if not is_admin(event):
+        await event.answer(
+            "⛔ Access denied.",
+            alert=True
+        )
+        return
+
+    try:
+
+        data = event.data.decode(
+            "utf-8"
+        )
+
+        parts = data.split(
+            ":",
+            2
+        )
+
+        if len(parts) != 3:
+
+            await event.answer(
+                "Invalid action.",
+                alert=True
+            )
+
+            return
+
+        _, action, value = parts
+
+        # ----------------------------------------------------
+        # BLOCK
+        # ----------------------------------------------------
+
+        if action == "block":
+
+            user_id = int(value)
+
+            if user_id == OWNER_ID:
+
+                await event.answer(
+                    "You cannot block yourself.",
+                    alert=True
+                )
+
+                return
+
+            pending = get_pending_action(
+                event.sender_id
+            )
+
+            reason = "Blocked by administrator"
+
+            if pending and pending.startswith(
+                "block:"
+            ):
+
+                pending_parts = pending.split(
+                    ":",
+                    2
+                )
+
+                if len(pending_parts) == 3:
+
+                    reason = (
+                        pending_parts[2]
+                        or reason
+                    )
+
+            block_user(
+                user_id,
+                reason
+            )
+
+            removed = purge_user_files(
+                user_id
+            )
+
+            clear_pending_action(
+                event.sender_id
+            )
+
+            await event.edit(
+                "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                "        🚫 USER BLOCKED\n"
+                "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                f"👤 User ID: <code>{user_id}</code>\n"
+                f"📝 Reason: {html.escape(reason)}\n"
+                f"🗑️ Links revoked: <code>{removed}</code>",
+                parse_mode="html"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # REMOVE USER
+        # ----------------------------------------------------
+
+        if action == "remove_user":
+
+            user_id = int(value)
+
+            removed = remove_user_data(
+                user_id
+            )
+
+            clear_pending_action(
+                event.sender_id
+            )
+
+            await event.edit(
+                "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                "        🗑️ USER DATA REMOVED\n"
+                "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                f"👤 User ID: <code>{user_id}</code>\n"
+                f"📦 Records removed: <code>{removed}</code>\n\n"
+                "✅ Generated links and related access history removed.",
+                parse_mode="html"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # REMOVE TOKEN
+        # ----------------------------------------------------
+
+        if action == "remove_token":
+
+            token = value
+
+            result = remove_token_data(
+                token
+            )
+
+            clear_pending_action(
+                event.sender_id
+            )
+
+            if not result:
+
+                await event.edit(
+                    "❌ <b>Token not found.</b>\n\n"
+                    f"🔑 <code>{html.escape(token)}</code>",
+                    parse_mode="html"
+                )
+
+                return
+
+            filename = html.escape(
+                str(
+                    result["filename"]
+                    or "Unknown"
+                )
+            )
+
+            await event.edit(
+                "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
+                "        🗑️ FILE REMOVED\n"
+                "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
+                f"📄 <b>{filename}</b>\n"
+                f"👤 User ID: <code>{result['chat_id']}</code>\n"
+                f"🔑 Token: <code>{html.escape(token)}</code>\n\n"
+                "✅ Generated link and related access history removed.",
+                parse_mode="html"
+            )
+
+            return
+
+        await event.answer(
+            "Unknown action.",
+            alert=True
+        )
+
+    except Exception as error:
+
+        print(
+            "[SECURITY] Confirmation error:",
+            error
+        )
+
+        await event.answer(
+            "Operation failed.",
+            alert=True
+        )
+
+        try:
+
+            await event.edit(
+                "❌ <b>Operation failed</b>\n\n"
+                f"<code>{html.escape(str(error))}</code>",
+                parse_mode="html"
+            )
+
+        except Exception:
+            pass
+
+
+# ============================================================
+# CANCEL CALLBACK
+# ============================================================
+
+@security_bot.on(
+    events.CallbackQuery(
+        pattern=rb"^cancel_action$"
+    )
+)
+async def cancel_action_callback(event):
+
+    if not is_admin(event):
+        await event.answer(
+            "⛔ Access denied.",
+            alert=True
+        )
+        return
+
+    clear_pending_action(
+        event.sender_id
+    )
+
+    await event.edit(
+        "❌ <b>Action cancelled.</b>",
+        parse_mode="html"
+    )
+# ============================================================
+# /CANCEL
+# ============================================================
+
+@security_bot.on(
+    events.NewMessage(
+        pattern=r"^/cancel$"
+    )
+)
+async def cancel_command(event):
+
+    if not is_admin(event):
+        return
+
+    clear_pending_action(
+        event.sender_id
+    )
+
+    await event.reply(
+        "❌ <b>Action cancelled.</b>",
+        parse_mode="html"
+    )
+# ============================================================
+# INTERACTIVE INPUT HANDLER
+# ============================================================
+
+@security_bot.on(
+    events.NewMessage(
+        pattern=r"^(?!/).+"
+    )
+)
+async def interactive_input_handler(event):
+
+    if not is_admin(event):
+        return
+
+    pending = get_pending_action(
+        event.sender_id
+    )
+
+    if not pending:
+        return
+
+    value = (
+        event.raw_text or ""
+    ).strip()
+
+    # --------------------------------------------------------
+    # INSPECT
+    # --------------------------------------------------------
+
+    if pending == "inspect":
+
+        if not value.isdigit():
+
+            await event.reply(
+                "❌ Please send a numeric User ID.",
+                parse_mode="html"
+            )
+
+            return
+
+        clear_pending_action(
+            event.sender_id
+        )
+
+        await perform_inspect(
+            event,
+            int(value)
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # BLOCK
+    # --------------------------------------------------------
+
+    if pending == "block":
+
+        if not value.isdigit():
+
+            await event.reply(
+                "❌ Please send a numeric User ID.",
+                parse_mode="html"
+            )
+
+            return
+
+        user_id = int(value)
+
+        if user_id == OWNER_ID:
+
+            clear_pending_action(
+                event.sender_id
+            )
+
+            await event.reply(
+                "❌ You cannot block yourself."
+            )
+
+            return
+
+        set_pending_action(
+            event.sender_id,
+            f"block:{user_id}:Blocked by administrator"
+        )
+
+        await confirm_action(
+            event,
+            "block",
+            user_id
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # REMOVE
+    # --------------------------------------------------------
+
+    if pending == "remove":
+
+        if value.isdigit():
+
+            user_id = int(value)
+
+            set_pending_action(
+                event.sender_id,
+                f"remove_user:{user_id}"
+            )
+
+            await confirm_action(
+                event,
+                "remove_user",
+                user_id
+            )
+
+            return
+
+        if (
+            len(value) == 32
+            and all(
+                c in "0123456789abcdefABCDEF"
+                for c in value
+            )
+        ):
+
+            set_pending_action(
+                event.sender_id,
+                f"remove_token:{value}"
+            )
+
+            await confirm_action(
+                event,
+                "remove_token",
+                value
+            )
+
+            return
+
+        await event.reply(
+            "❌ Invalid input.\n\n"
+            "Send a User ID or 32-character token.",
+            parse_mode="html"
+        )
+
+        return
 
 # ============================================================
 # /BLOCK
@@ -591,7 +1550,7 @@ async def inspect_command(event):
 
 @security_bot.on(
     events.NewMessage(
-        pattern=r"^/block\s+(\d+)(?:\s+(.+))?$"
+        pattern=r"^/block(?:\s+(\d+)(?:\s+(.+))?)?$"
     )
 )
 async def block_command(event):
@@ -599,12 +1558,36 @@ async def block_command(event):
     if not is_admin(event):
         return
 
+    match = event.pattern_match
+
+    # --------------------------------------------------------
+    # /block → ask for USER_ID
+    # --------------------------------------------------------
+
+    if not match.group(1):
+
+        set_pending_action(
+            event.sender_id,
+            "block"
+        )
+
+        await event.reply(
+            "🚫 <b>BLOCK USER</b>\n\n"
+            "Send the <b>User ID</b> you want to block.\n\n"
+            "Example:\n"
+            "<code>8540425480</code>\n\n"
+            "Use /cancel to cancel.",
+            parse_mode="html"
+        )
+
+        return
+
     user_id = int(
-        event.pattern_match.group(1)
+        match.group(1)
     )
 
     reason = (
-        event.pattern_match.group(2)
+        match.group(2)
         or "Blocked by administrator"
     ).strip()
 
@@ -616,26 +1599,16 @@ async def block_command(event):
 
         return
 
-    block_user(
-        user_id,
-        reason
+    set_pending_action(
+        event.sender_id,
+        f"block:{user_id}:{reason}"
     )
 
-    removed = purge_user_files(
+    await confirm_action(
+        event,
+        "block",
         user_id
     )
-
-    await event.reply(
-        "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-        "        🚫 USER BLOCKED\n"
-        "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
-
-        f"👤 User ID: <code>{user_id}</code>\n"
-        f"📝 Reason: {html.escape(reason)}\n"
-        f"🗑️ Links revoked: <code>{removed}</code>",
-        parse_mode="html"
-    )
-
 
 # ============================================================
 # /UNBLOCK
