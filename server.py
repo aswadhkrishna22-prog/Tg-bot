@@ -1,61 +1,109 @@
 import asyncio
 import html
-import mimetypes
 import os
 import re
-import psycopg2
 import uuid
 import time
+import shutil
+import threading
 import psutil
-import qrcode
-from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request as URLRequest, urlopen
 from urllib.parse import urlencode
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from telethon import TelegramClient, events, Button
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from telethon import TelegramClient, events, Button, errors
 import uvicorn
 
 # ============================================================
-# CONFIG
+# MODULAR CONFIG / PURE HELPERS
 # ============================================================
 
-load_dotenv()
-
-try:
-    API_ID = int(os.getenv("TG_API_ID", "0"))
-except ValueError:
-    raise RuntimeError("TG_API_ID must be a number")
-
-API_HASH = os.getenv("TG_API_HASH", "").strip()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-SECURITY_BOT_TOKEN = os.getenv("SECURITY_BOT_TOKEN", "").strip()
-
-# Deployment mode:
-# true  = RamnayCloud: Telegram bot + web/streaming
-# false = Render: web/streaming only, Telegram updates disabled
-BOT_MODE = os.getenv("BOT_MODE", "false").strip().lower() in (
-    "1", "true", "yes", "on"
+from config import (
+    API_ID, API_HASH, BOT_TOKEN, SECURITY_BOT_TOKEN, BOT_MODE,
+    SECURITY_OWNER_ID, PUBLIC_URL, HOST, PORT, CHUNK_SIZE,
+    CACHE_CHUNK_SIZE, CACHE_TTL, CACHE_MAX_SIZE, CACHE_DIR,
+    CACHE_PER_FILE_MAX_SIZE, CACHE_MIN_FREE_SPACE, CACHE_CLEANUP_INTERVAL,
+    MAX_CONCURRENT_STREAMS, MAX_CONCURRENT_PER_FILE, STREAM_ACQUIRE_TIMEOUT,
+    MAX_CONCURRENT_TELEGRAM_DOWNLOADS, TELEGRAM_FLOODWAIT_CAP,
+    MAX_FILE_SIZE, FILE_COOLDOWN, STREAM_IDLE_TIMEOUT, REQUEST_RATE_LIMIT,
+    PREFETCH_ENABLED,
+    PREFETCH_MAX_TASKS, DB_CONNECT_TIMEOUT, DB_KEEPALIVES_IDLE,
+    DB_KEEPALIVES_INTERVAL, DB_KEEPALIVES_COUNT, BASE_DIR, DATABASE_URL,
+    ERROR_PAGE, ERROR_IMAGE, RAIN_OVERLAY, RAIN_OVERLAY_WEBM,
+    SECURITY_V3_SERVER_ENABLED, SECURITY_V3_SERVER_CACHE_TTL,
+    SECURITY_V3_SERVER_MAX_STREAMS_PER_USER,
 )
 
-try:
-    SECURITY_OWNER_ID = int(os.getenv("SECURITY_OWNER_ID", "0"))
-except ValueError:
-    raise RuntimeError("SECURITY_OWNER_ID must be a number")
+from utils import (
+    clean_filename, get_mime, get_stream_mime, detect_media_profile,
+    parse_range, format_uptime, usage_bar,
+)
 
-PUBLIC_URL = os.getenv(
-    "PUBLIC_URL",
-    "http://127.0.0.1:8000"
-).strip().rstrip("/")
+from database import (
+    set_metric_callback,
+    db_connect, init_database, add_file, save_bot_message_id,
+    create_share_token, create_pair_code,
+    record_file_access, record_bytes_served, get_file,
+)
 
-HOST = "0.0.0.0"
-PORT = 8000
-CHUNK_SIZE = 512 * 1024
+from telegram_service import (
+    configure as configure_telegram_service,
+    wait_for_telegram_cooldown, set_telegram_cooldown, telegram_stream,
+)
+
+from cache import (
+    configure as configure_cache, cache_locks, cache_locks_guard,
+    cache_active_files, cleanup_cache_sync, cached_telegram_stream,
+    launch_prefetch, remove_cache_token,
+)
+
+from sharing import router as sharing_router, configure as configure_sharing
+from pairing import router as pairing_router, configure as configure_pairing, cleanup_pair_attempts
+from pages import render_error_page, render_home_page, render_watch_page
+
+from cleanup import (
+    configure as configure_cleanup,
+    cleanup_cache_loop, cleanup_expired_files,
+)
+
+# Compatibility alias used by existing non-page error responses.
+stady_error_page = render_error_page
+
+# ============================================================
+# STREAM CONCURRENCY PROTECTION
+# ============================================================
+
+from stream_control import (
+    global_stream_semaphore,
+    file_stream_semaphores,
+    file_stream_semaphores_guard,
+    get_file_stream_semaphore,
+    remove_file_stream_semaphore,
+)
+
+# ============================================================
+# TELEGRAM API PROTECTION
+# ============================================================
+# Limit simultaneous Telegram media downloads and share FloodWait
+# cooldown across all viewers. This prevents a burst of cache misses
+# from creating a Telegram API request storm.
+MAX_CONCURRENT_TELEGRAM_DOWNLOADS = int(
+    os.getenv("MAX_CONCURRENT_TELEGRAM_DOWNLOADS", "3")
+)
+TELEGRAM_FLOODWAIT_CAP = int(
+    os.getenv("TELEGRAM_FLOODWAIT_CAP", "60")
+)
+
+telegram_download_semaphore = asyncio.Semaphore(
+    MAX_CONCURRENT_TELEGRAM_DOWNLOADS
+)
+telegram_cooldown_lock = asyncio.Lock()
+telegram_cooldown_until = 0.0
+
 
 # ============================================================
 # FILE LIMITS / RATE LIMIT
@@ -65,223 +113,42 @@ MAX_FILE_SIZE = 6 * 1024 * 1024 * 1024   # 6 GB
 
 FILE_COOLDOWN = 10                        # 10 seconds
 
+# Per-user upload cooldown state. Kept at module scope because receive_file()
+# uses it to prevent rapid repeated uploads from the same Telegram user.
 user_file_cooldowns = {}
 
+# Runtime bot username, populated after Telegram connection in main().
 BOT_USERNAME = ""
 
-if API_ID <= 0:
-    raise RuntimeError("TG_API_ID is missing or invalid")
+# Runtime observability and request-rate limiting are provided by observability.py.
 
-if not API_HASH:
-    raise RuntimeError("TG_API_HASH is missing")
+from observability import (
+    metric_inc,
+    get_metrics_snapshot,
+    request_rate_middleware,
+    request_rate_state,
+    request_rate_lock,
+    cleanup_request_rate_state,
+)
 
-if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN is missing (required for Telegram streaming/authentication)"
-    )
+app = FastAPI(title="Adolf-StreamX")
+app.middleware("http")(request_rate_middleware)
 
-# ============================================================
-# DATABASE
-# ============================================================
+@app.get("/health")
+async def health():
+    telegram_ok = False
+    try: telegram_ok = bool(bot.is_connected())
+    except Exception: pass
+    db_ok = False
+    try:
+        with db_connect() as db:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT 1"); cursor.fetchone()
+        db_ok = True
+    except Exception: pass
+    ok = telegram_ok and db_ok
+    return JSONResponse({"ok": ok, "telegram": telegram_ok, "database": db_ok}, status_code=200 if ok else 503)
 
-BASE_DIR = Path(__file__).resolve().parent
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    ""
-).strip()
-
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL is missing"
-    )
-
-
-def db_connect():
-
-    connection = psycopg2.connect(
-        DATABASE_URL,
-        sslmode="require",
-        cursor_factory=RealDictCursor
-    )
-
-    return connection
-
-
-def init_database():
-
-    with db_connect() as db:
-
-        with db.cursor() as cursor:
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS files (
-                    token TEXT PRIMARY KEY,
-                    chat_id BIGINT NOT NULL,
-                    message_id BIGINT NOT NULL,
-                    filename TEXT NOT NULL,
-                    size BIGINT NOT NULL,
-                    mime TEXT NOT NULL,
-                    expires_at TIMESTAMPTZ
-                )
-            """)
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    first_name TEXT NOT NULL DEFAULT '',
-                    last_name TEXT NOT NULL DEFAULT '',
-                    username TEXT NOT NULL DEFAULT '',
-                    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-
-            cursor.execute("""
-                ALTER TABLE files
-                ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
-            """)
-
-            cursor.execute("""
-                UPDATE files
-                SET expires_at = NOW() + INTERVAL '12 hours'
-                WHERE expires_at IS NULL
-            """)
-
-            cursor.execute("""
-                ALTER TABLE files
-                ADD COLUMN IF NOT EXISTS bot_chat_id BIGINT
-            """)
-
-            cursor.execute("""
-                ALTER TABLE files
-                ADD COLUMN IF NOT EXISTS bot_message_id BIGINT
-            """)
-
-            cursor.execute("""
-                ALTER TABLE files
-                ADD COLUMN IF NOT EXISTS share_token TEXT
-            """)
-
-            cursor.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_files_share_token
-                ON files (share_token)
-                WHERE share_token IS NOT NULL
-            """)
-
-        db.commit()
-
-
-def add_file(
-    token,
-    chat_id,
-    message_id,
-    filename,
-    size,
-    mime
-):
-    with db_connect() as db:
-
-        with db.cursor() as cursor:
-
-            cursor.execute("""
-                INSERT INTO files
-                (
-                    token,
-                    chat_id,
-                    message_id,
-                    filename,
-                    size,
-                    mime,
-                    expires_at
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    NOW() + INTERVAL '12 hours'
-                )
-            """, (
-                token,
-                chat_id,
-                message_id,
-                filename,
-                size,
-                mime
-            ))
-
-        db.commit()
-        
-def save_bot_message_id(
-    token,
-    bot_chat_id,
-    bot_message_id
-):
-    with db_connect() as db:
-
-        with db.cursor() as cursor:
-
-            cursor.execute("""
-                UPDATE files
-                SET
-                    bot_chat_id = %s,
-                    bot_message_id = %s
-                WHERE token = %s
-            """, (
-                int(bot_chat_id),
-                int(bot_message_id),
-                token
-            ))
-
-        db.commit()
-
-
-
-
-
-def create_share_token(token):
-    """Create a short token used only for device sharing."""
-    for _ in range(10):
-        share_token = uuid.uuid4().hex[:10]
-        try:
-            with db_connect() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        UPDATE files
-                        SET share_token = %s
-                        WHERE token = %s
-                    """, (share_token, token))
-                db.commit()
-            return share_token
-        except psycopg2.errors.UniqueViolation:
-            continue
-
-    raise RuntimeError("Could not create a unique share token")
-
-
-def get_file_by_share_token(share_token):
-    with db_connect() as db:
-        with db.cursor() as cursor:
-            cursor.execute("""
-                SELECT *
-                FROM files
-                WHERE share_token = %s
-                AND (
-                    expires_at IS NULL
-                    OR expires_at > NOW()
-                )
-            """, (share_token,))
-            return cursor.fetchone()
-
-
-
-# ============================================================
-# FASTAPI / TELEGRAM
-# ============================================================
-
-app = FastAPI(title="STADY-PROXY")
 
 bot = TelegramClient(
     "proxybot",
@@ -290,17 +157,37 @@ bot = TelegramClient(
     receive_updates=BOT_MODE
 )
 
+configure_telegram_service(
+    bot=bot,
+    telegram_download_semaphore=telegram_download_semaphore,
+    telegram_cooldown_lock=telegram_cooldown_lock,
+    chunk_size=CHUNK_SIZE,
+    telegram_floodwait_cap=TELEGRAM_FLOODWAIT_CAP,
+    stream_idle_timeout=STREAM_IDLE_TIMEOUT,
+    metric_inc=metric_inc,
+)
+
 BOT_START_TIME = time.time()
 LAST_ERROR = "None"
 # ============================================================
-# CUSTOM STADY-PROXY ERROR PAGE
+# CUSTOM Adolf-StreamX ERROR PAGE
 # ============================================================
 
-ERROR_PAGE = BASE_DIR / "stady_proxy_404.html"
-ERROR_IMAGE = BASE_DIR / "stady-proxy-404.png"
+@app.get("/stady-proxy-rain-overlay-v2.webm")
+async def stady_proxy_rain_overlay_webm():
+    if not RAIN_OVERLAY_WEBM.is_file():
+        raise HTTPException(status_code=404, detail="Rain overlay WebM asset not found")
+    return FileResponse(RAIN_OVERLAY_WEBM, media_type="video/webm", headers={"Cache-Control":"public, max-age=31536000, immutable", "Accept-Ranges":"bytes"})
 
 
-@app.get("/stady-proxy-404.png")
+@app.get("/stady-proxy-rain-overlay-v2.mp4")
+async def stady_proxy_rain_overlay():
+    if not RAIN_OVERLAY.is_file():
+        raise HTTPException(status_code=404, detail="Rain overlay asset not found")
+    return FileResponse(RAIN_OVERLAY, media_type="video/mp4", headers={"Cache-Control":"public, max-age=31536000, immutable", "Accept-Ranges":"bytes"})
+
+
+@app.get("/adolf-streamx-404.png")
 async def stady_proxy_404_image():
     return FileResponse(
         ERROR_IMAGE,
@@ -309,85 +196,15 @@ async def stady_proxy_404_image():
 
 
 
-def stady_error_page():
-    try:
-        return ERROR_PAGE.read_text(
-            encoding="utf-8"
-        )
 
-    except Exception as error:
-        print(
-            "[!] Could not load custom 404 page:",
-            error
-        )
 
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>STADY-PROXY — 404 ERROR</title>
-        </head>
-        <body style="
-            background:#020812;
-            color:#69f7ff;
-            text-align:center;
-            font-family:Arial;
-            padding-top:100px;
-        ">
-            <h1>STADY-PROXY</h1>
-            <h2>404 — FILE NOT AVAILABLE</h2>
-            <a href="/" style="color:#ff24d7;">
-                Return Home
-            </a>
-        </body>
-        </html>
-        """
-def get_file(token):
+from owner import configure as configure_owner, get_owner_display
 
-    with db_connect() as db:
-
-        with db.cursor() as cursor:
-
-            cursor.execute("""
-                SELECT *
-                FROM files
-                WHERE token = %s
-                AND (
-                    expires_at IS NULL
-                    OR expires_at > NOW()
-                )
-            """, (
-                token,
-            ))
-
-            return cursor.fetchone()
+configure_owner(bot=bot, db_connect=db_connect)
 
 # ============================================================
 # SERVER STATS
 # ============================================================
-
-def format_uptime(seconds):
-    seconds = int(seconds)
-
-    days = seconds // 86400
-    seconds %= 86400
-
-    hours = seconds // 3600
-    seconds %= 3600
-
-    minutes = seconds // 60
-    seconds %= 60
-
-    return f"{days}d {hours}h {minutes}m {seconds}s"
-
-
-def usage_bar(percent, total=10):
-    filled = round(percent / 100 * total)
-    filled = max(0, min(total, filled))
-
-    return "●" * filled + "○" * (total - filled)
-
 
 @bot.on(events.NewMessage(pattern=r"^/stats$"))
 async def stats_command(event):
@@ -457,7 +274,7 @@ async def stats_command(event):
 
         message = (
             "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-            "        ⚡ STADY-PROXY\n"
+            "        ⚡ Adolf-StreamX\n"
             "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
 
             "📊 <b>SERVER STATISTICS</b>\n\n"
@@ -532,129 +349,24 @@ async def stats_command(event):
 
 
 # ============================================================
-# HELPERS
+# PURE HELPERS
 # ============================================================
-
-def clean_filename(name):
-
-    if not name:
-        return "file"
-
-    name = os.path.basename(name)
-
-    name = re.sub(
-        r'[<>:"/\\|?*\x00-\x1f]',
-        "_",
-        name
-    )
-
-    return name[:180] or "file"
-
-
-def get_mime(filename):
-
-    mime, _ = mimetypes.guess_type(filename)
-
-    return mime or "application/octet-stream"
-
-
-def parse_range(range_header, file_size):
-
-    if not range_header:
-        return 0, file_size - 1
-
-    if not range_header.startswith("bytes="):
-        raise ValueError("Invalid range")
-
-    value = range_header[6:]
-
-    if "," in value:
-        raise ValueError(
-            "Multiple ranges not supported"
-        )
-
-    start_text, end_text = value.split("-", 1)
-
-    if start_text:
-
-        start = int(start_text)
-
-        if start >= file_size:
-            raise ValueError(
-                "Range outside file"
-            )
-
-        if end_text:
-            end = min(
-                int(end_text),
-                file_size - 1
-            )
-        else:
-            end = file_size - 1
-
-        if start > end:
-            raise ValueError(
-                "Invalid range"
-            )
-
-        return start, end
-
-    end = int(end_text)
-
-    if end <= 0:
-        raise ValueError(
-            "Invalid suffix range"
-        )
-
-    start = max(
-        file_size - end,
-        0
-    )
-
-    return start, file_size - 1
-
+# Implemented in utils.py; imported above to preserve the existing API.
 
 # ============================================================
 # TELEGRAM STREAM
 # ============================================================
 
-async def telegram_stream(
-    message,
-    offset,
-    length
-):
 
-    sent = 0
 
-    try:
 
-        async for chunk in bot.iter_download(
-            message.media,
-            offset=offset,
-            limit=length,
-            request_size=CHUNK_SIZE
-        ):
 
-            if not chunk:
-                continue
 
-            sent += len(chunk)
 
-            yield chunk
-
-            if sent >= length:
-                break
-
-    except asyncio.CancelledError:
-
-        return
-
-    except Exception as error:
-
-        print(
-            "[!] Telegram streaming error:",
-            error
-        )
+# ============================================================
+# BACKGROUND CLEANUP
+# ============================================================
+# Implemented in cleanup.py; imported above to preserve the existing API.
 
 
 @bot.on(events.NewMessage)
@@ -678,6 +390,11 @@ async def receive_file(event):
     try:
 
         chat_id = int(event.chat_id)
+        sender = await event.get_sender()
+        owner_name = " ".join(part for part in [getattr(sender, "first_name", "") or "", getattr(sender, "last_name", "") or ""] if part).strip()
+        owner_username = getattr(sender, "username", "") or ""
+        if not owner_name:
+            owner_name = f"@{owner_username}" if owner_username else "Telegram User"
 
         # ====================================================
         # FILE SIZE CHECK
@@ -789,7 +506,9 @@ async def receive_file(event):
             message_id,
             filename,
             size,
-            mime
+            mime,
+            owner_name,
+            owner_username
         )
 
         stream_url = (
@@ -798,6 +517,8 @@ async def receive_file(event):
 
         share_token = create_share_token(token)
         share_url = f"{PUBLIC_URL}/share/{share_token}"
+
+        pair_code = create_pair_code(token)
 
         size_gb = (
             size / 1024 / 1024 / 1024
@@ -849,10 +570,12 @@ async def receive_file(event):
         ]
 
         sent_message = await event.reply(
-            "✅ <b>STADY-PROXY FILE READY!</b>\n\n"
+            "✅ <b>Adolf-StreamX FILE READY!</b>\n\n"
             f"🎬 <b>{html.escape(filename)}</b>\n"
             f"📦 Size: "
             f"<code>{size_gb:.2f} GB</code>\n\n"
+            f"📺 <b>TV PAIRING CODE:</b> <code>{pair_code}</code>\n\n"
+            "On your TV, open Adolf-StreamX and enter this 6-digit code.\n\n"
             "Click the button below to stream:",
             buttons=buttons,
             parse_mode="html"
@@ -923,7 +646,7 @@ async def start_command(event):
     if not BOT_MODE:
         return
 
-    # Deep-link from the STADY-PROXY 404 page.
+    # Deep-link from the Adolf-StreamX 404 page.
     # Telegram sends: /start unavailable
     start_match = event.pattern_match
     start_param = (
@@ -955,8 +678,11 @@ async def start_command(event):
                     INSERT INTO users
                     (user_id, first_name, last_name, username)
                     VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO NOTHING
-                    RETURNING user_id
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        first_name = EXCLUDED.first_name,
+                        last_name = EXCLUDED.last_name,
+                        username = EXCLUDED.username
+                    RETURNING user_id, (xmax = 0) AS inserted
                     """,
                     (
                         int(user.id),
@@ -966,7 +692,8 @@ async def start_command(event):
                     )
                 )
 
-                is_new_user = cursor.fetchone() is not None
+                user_row = cursor.fetchone()
+                is_new_user = bool(user_row and user_row.get("inserted"))
 
     except Exception as error:
         print(f"User tracking failed: {error}")
@@ -977,7 +704,7 @@ async def start_command(event):
     await event.reply(
 
         "╭━━━━━━━━━━━━━━━━━━━━━━╮\n"
-        "        ⚡ STADY-PROXY\n"
+        "        ⚡ Adolf-StreamX\n"
         "╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
 
         "🎬 FILE → STREAM → DOWNLOAD\n\n"
@@ -1017,879 +744,115 @@ async def start_command(event):
 
 
 # ============================================================
-# STADY-PROXY THEME
+# Adolf-StreamX THEME
 # IMPORTANT:
 # CSS uses SINGLE braces because this string is not an f-string.
 # ============================================================
 
 STADY_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Poppins:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 *{box-sizing:border-box}
-
-html,body{
-    margin:0;
-    min-height:100%;
-    font-family:Poppins,Arial,sans-serif;
-    background:#030914;
-    color:#eaf7ff;
-}
-
-body{
-    overflow-x:hidden;
-    background:
-        radial-gradient(circle at 15% 20%,rgba(0,238,255,.16),transparent 28%),
-        radial-gradient(circle at 85% 65%,rgba(255,0,213,.16),transparent 30%),
-        linear-gradient(180deg,#020812,#061629 55%,#020812);
-}
-
-body:before{
-    content:"";
-    position:fixed;
-    inset:0;
-    pointer-events:none;
-    opacity:.32;
-    background-image:
-        linear-gradient(rgba(0,255,255,.08) 1px,transparent 1px),
-        linear-gradient(90deg,rgba(0,255,255,.05) 1px,transparent 1px);
-    background-size:34px 34px;
-    mask-image:linear-gradient(
-        to bottom,
-        transparent,
-        #000 12%,
-        #000 85%,
-        transparent
-    );
-}
-
-.page{
-    width:min(720px,100%);
-    margin:auto;
-    padding:22px 14px 45px;
-}
-
-.brand{
-    text-align:center;
-    font-family:Orbitron,sans-serif;
-    font-size:clamp(28px,7vw,46px);
-    font-weight:800;
-    letter-spacing:2px;
-    margin:8px 0 20px;
-    color:#69f7ff;
-    text-shadow:
-        0 0 8px #00eaff,
-        0 0 22px #7c28ff,
-        0 0 40px #ff18d5;
-}
-
-.frame{
-    position:relative;
-    padding:12px;
-    border:2px solid #42eaff;
-    border-radius:15px;
-    background:
-        linear-gradient(
-            145deg,
-            rgba(12,43,72,.9),
-            rgba(4,13,28,.94)
-        );
-    box-shadow:
-        0 0 10px #00eaff,
-        inset 0 0 20px rgba(0,234,255,.15),
-        0 0 30px rgba(255,0,213,.2);
-}
-
-.frame:before,
-.frame:after{
-    content:"";
-    position:absolute;
-    height:5px;
-    width:90px;
-    top:-5px;
-    background:linear-gradient(
-        90deg,
-        #00eaff,
-        #bdfcff,
-        #ff24d7
-    );
-    box-shadow:0 0 12px #00eaff;
-    border-radius:4px;
-}
-
-.frame:before{left:35px}
-.frame:after{right:35px}
-
-.poster{
-    position:relative;
-    overflow:hidden;
-    border:2px solid #36f3ff;
-    border-radius:8px;
-    aspect-ratio:16/9;
-    background:#0a2039;
-    box-shadow:
-        inset 0 0 22px rgba(0,255,255,.35),
-        0 0 14px rgba(0,234,255,.45);
-}
-
-.poster img{
-    width:100%;
-    height:100%;
-    display:block;
-    object-fit:cover;
-}
-
-.play{
-    position:absolute;
-    left:50%;
-    top:50%;
-    transform:translate(-50%,-50%);
-    width:118px;
-    height:82px;
-    border:2px solid #9afcff;
-    border-radius:16px;
-    background:rgba(75,90,112,.58);
-    backdrop-filter:blur(5px);
-    color:#dffcff;
-    font-size:44px;
-    line-height:78px;
-    text-align:center;
-    text-shadow:0 0 10px #00eaff;
-    box-shadow:0 0 18px rgba(0,238,255,.35);
-    cursor:pointer;
-}
-
-.actions{
-    display:grid;
-    gap:14px;
-    margin:18px 0;
-}
-
-.btn{
-    appearance:none;
-    border:2px solid #38f5ff;
-    border-radius:10px;
-    padding:15px 12px;
-    width:100%;
-    font:500 clamp(17px,4.6vw,25px) Poppins,sans-serif;
-    color:#eaffff;
-    cursor:pointer;
-    background:
-        linear-gradient(
-            180deg,
-            rgba(17,72,103,.95),
-            rgba(10,33,62,.98)
-        );
-    box-shadow:
-        0 0 9px rgba(0,238,255,.75),
-        inset 0 0 16px rgba(0,238,255,.12),
-        0 5px 0 rgba(255,0,204,.35);
-    transition:.18s transform,.18s filter;
-}
-
-.btn:hover{
-    filter:brightness(1.25);
-    transform:translateY(-2px);
-}
-
-.btn:active{
-    transform:translateY(1px);
-}
-
-.players{
-    display:none;
-    border-radius:0 0 18px 18px;
-    background:#101b28;
-    margin-top:-14px;
-    padding:22px 12px 18px;
-    text-align:center;
-    box-shadow:0 8px 18px rgba(0,0,0,.35);
-    font-size:18px;
-}
-
-.players button{
-    display:block;
-    width:100%;
-    border:0;
-    background:none;
-    color:#f0f5ff;
-    font:inherit;
-    padding:8px;
-    cursor:pointer;
-}
-
-.players button:hover{
-    color:#56efff;
-}
-
-.info{
-    margin-top:14px;
-    padding:16px 4px 8px;
-    font-size:16px;
-    line-height:2;
-    color:#e7f4ff;
-}
-
-.info div{
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
-
-.info b{
-    font-weight:500;
-}
-
-.status{
-    font-size:13px;
-    color:#8edfff;
-    text-align:center;
-    margin-top:8px;
-    opacity:.8;
-}
-
-@media(max-width:480px){
-
-    .page{
-        padding-left:9px;
-        padding-right:9px;
-    }
-
-    .frame{
-        padding:9px;
-    }
-
-    .play{
-        width:95px;
-        height:68px;
-        line-height:64px;
-        font-size:34px;
-    }
-
-    .info{
-        font-size:14px;
-    }
-}
+html,body{margin:0;min-height:100%;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#05070d;color:#eef2ff}
+body{overflow-x:hidden;background:
+ radial-gradient(circle at 8% 8%,rgba(124,58,237,.13),transparent 30%),
+ radial-gradient(circle at 92% 42%,rgba(6,182,212,.09),transparent 28%),
+ linear-gradient(180deg,#05070d 0%,#070a12 52%,#04060b 100%)}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.16;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.02) 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
+.page{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:24px 0 44px;position:relative;z-index:1}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:8px 2px 22px;border-bottom:1px solid rgba(148,163,184,.10)}
+.brand-wrap{display:flex;align-items:center;gap:12px;min-width:0}
+.logo-mark{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#7c3aed,#2563eb);box-shadow:0 10px 35px rgba(99,102,241,.24);font-size:21px;font-weight:800;color:#fff}
+.brand-name{font-size:21px;font-weight:800;letter-spacing:.4px;white-space:nowrap}.brand-name span{color:#22d3ee}.brand-sub{margin-top:3px;color:#7f8ba3;font-size:12px}
+.top-actions{display:flex;align-items:center;gap:9px}.online{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid rgba(34,197,94,.13);border-radius:999px;background:rgba(15,23,42,.58);color:#a7f3d0;font-size:12px;font-weight:700}.online i{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,.75)}
+.top-btn,.menu-btn{border:1px solid rgba(124,58,237,.62);background:rgba(10,14,25,.78);color:#f5f7ff;border-radius:11px;padding:10px 14px;font:600 13px Inter;cursor:pointer;text-decoration:none;transition:.18s}.top-btn:hover,.menu-btn:hover{transform:translateY(-1px);border-color:#8b5cf6;background:rgba(20,16,39,.95)}.menu-btn{width:40px;padding:10px 0;border-color:rgba(148,163,184,.18);font-size:18px}
+.hero{text-align:center;padding:44px 12px 30px}.hero h1{margin:0;font-size:clamp(32px,5vw,52px);line-height:1.08;letter-spacing:-1.8px;font-weight:800;background:linear-gradient(90deg,#a855f7 0%,#60a5fa 48%,#22d3ee 100%);-webkit-background-clip:text;background-clip:text;color:transparent}.hero p{margin:12px auto 0;color:#94a3b8;font-size:16px;max-width:620px}
+.frame{border:1px solid rgba(99,102,241,.18);background:linear-gradient(180deg,rgba(10,14,25,.86),rgba(7,10,18,.94));border-radius:22px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.34)}
+.player-wrap{padding:12px}.poster{position:relative;width:100%;aspect-ratio:16/9;min-height:260px;overflow:hidden;border-radius:16px;background:#03050a center/cover no-repeat url('https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=1600&q=85');border:1px solid rgba(148,163,184,.12)}.poster:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,5,12,.12),rgba(2,5,12,.54))}.poster-content{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}.poster-icon{width:82px;height:82px;border-radius:50%;display:grid;place-items:center;background:rgba(3,7,18,.78);border:2px solid transparent;background-image:linear-gradient(#07101c,#07101c),linear-gradient(135deg,#a855f7,#22d3ee);background-origin:border-box;background-clip:padding-box,border-box;box-shadow:0 0 45px rgba(34,211,238,.16),0 0 35px rgba(168,85,247,.16);font-size:31px;color:#fff}.poster-title{margin-top:16px;font-size:18px;font-weight:700}.poster-sub{margin-top:7px;color:#c0cadb;font-size:13px;max-width:430px;line-height:1.5}.poster-codec,.profile-badge{display:inline-flex;align-items:center;gap:7px;margin-top:12px;padding:7px 11px;border:1px solid rgba(148,163,184,.18);border-radius:999px;background:rgba(2,6,16,.58);color:#cbd5e1;font-size:12px}.profile-row{text-align:center;padding:0 12px 10px}.profile-badge{color:#a5f3fc;border-color:rgba(34,211,238,.18)}
+.video-shell{position:relative;width:100%;height:100%;background:#000;border-radius:16px;overflow:hidden}.video-shell video{width:100%;height:100%;display:block;object-fit:contain;background:#000;border:0;outline:0}.video-controls{position:absolute;left:10px;right:10px;bottom:10px;z-index:10;padding:8px 10px 7px;border-radius:13px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.9) 34%);opacity:1;transition:opacity .2s}.video-controls.hide{opacity:0;pointer-events:none}.video-seek{width:100%;height:5px;margin:0 0 6px;accent-color:#8b5cf6;cursor:pointer}.control-row{display:flex;align-items:center;gap:8px;color:#fff}.control-row button{border:0;background:transparent;color:#fff;font-size:20px;padding:3px 7px;cursor:pointer}.video-time{font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.control-spacer{flex:1}.video-error{display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(88%,420px);padding:16px;border-radius:14px;background:rgba(0,0,0,.9);color:#fff;text-align:center;font-size:14px;line-height:1.5;z-index:12}
+.action-panel{padding:4px 20px 20px}.primary-actions{display:grid;grid-template-columns:1fr 1fr;gap:14px}.btn{border:1px solid rgba(148,163,184,.15);border-radius:15px;min-height:74px;padding:13px 16px;background:rgba(15,23,42,.72);color:#f8fafc;text-decoration:none;font:600 17px Inter;cursor:pointer;transition:.18s;box-shadow:inset 0 1px rgba(255,255,255,.025)}.btn small{display:block;margin-top:5px;color:#94a3b8;font-size:12px;font-weight:500}.btn.stream-btn{border-color:rgba(168,85,247,.7);background:linear-gradient(135deg,rgba(76,29,149,.22),rgba(15,23,42,.72))}.btn.download-btn{border-color:rgba(34,211,238,.72);background:linear-gradient(135deg,rgba(8,145,178,.13),rgba(15,23,42,.72))}.btn:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(0,0,0,.24)}.secondary-actions{display:flex;gap:10px;margin-top:10px}.secondary-actions .btn{min-height:46px;font-size:13px;padding:10px 14px;flex:1}.disabled{opacity:.45;cursor:not-allowed}
+.players{display:none;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px;padding:10px;border:1px solid rgba(148,163,184,.10);border-radius:14px;background:rgba(2,6,16,.55)}.players button{border:1px solid rgba(148,163,184,.14);background:#0b1120;color:#dbe5f5;border-radius:10px;padding:10px 7px;font:600 12px Inter;cursor:pointer}.players button:hover{border-color:#7c3aed;background:#11162a}
+.info{margin:0 20px 20px;border:1px solid rgba(148,163,184,.12);border-radius:16px;overflow:hidden;background:rgba(8,12,22,.64)}.info-head{display:flex;align-items:center;gap:10px;padding:17px 20px;border-bottom:1px solid rgba(148,163,184,.10);color:#b9c5da;font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}.info-head .ico{color:#a855f7;font-size:18px}.info-row{display:grid;grid-template-columns:190px 1fr;gap:20px;padding:16px 20px;border-bottom:1px solid rgba(148,163,184,.07);font-size:14px}.info-row:last-child{border-bottom:0}.info-label{color:#8290a8}.info-value{color:#cbd5e1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.verified{color:#c4b5fd;font-weight:700}
+.features{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.feature{padding:17px;border:1px solid rgba(148,163,184,.11);border-radius:14px;background:rgba(8,12,22,.64)}.feature-icon{font-size:22px;margin-bottom:12px}.feature strong{display:block;font-size:13px}.feature span{display:block;margin-top:5px;color:#77849b;font-size:11px;line-height:1.4}
+.status{text-align:center;color:#7c8ba3;font-size:12px;margin:18px 0}.footer{text-align:center;color:#68758c;font-size:12px;padding-top:10px}.footer .brand-footer{color:#a78bfa;font-weight:700}.footer a{color:#ec4899;text-decoration:none;font-weight:700}
+@media(max-width:760px){.page{width:min(100% - 18px,1120px);padding-top:12px}.topbar{padding-bottom:16px}.brand-name{font-size:18px}.brand-sub{font-size:11px}.online{display:none}.hero{padding:28px 8px 22px}.hero h1{font-size:34px;letter-spacing:-1.2px}.hero p{font-size:14px}.frame{border-radius:18px}.player-wrap{padding:9px}.poster{min-height:210px;border-radius:13px}.action-panel{padding:3px 12px 14px}.primary-actions{gap:9px}.btn{min-height:67px;font-size:15px;padding:11px}.secondary-actions{gap:8px}.players{grid-template-columns:repeat(2,1fr)}.info{margin:0 12px 14px}.info-row{grid-template-columns:110px 1fr;padding:14px 14px;font-size:13px}.features{grid-template-columns:repeat(2,1fr);gap:8px;margin:12px}.feature{padding:13px}.feature-icon{margin-bottom:8px}.feature strong{font-size:12px}.feature span{font-size:10px}}
+@media(max-width:430px){.top-btn{display:none}.logo-mark{width:38px;height:38px}.brand-name{font-size:17px}.hero h1{font-size:30px}.poster-icon{width:68px;height:68px;font-size:26px}.primary-actions{grid-template-columns:1fr}.secondary-actions{display:grid;grid-template-columns:1fr 1fr}.info-row{grid-template-columns:1fr;gap:5px}.info-value{text-align:left;white-space:normal;word-break:break-word}.features{grid-template-columns:1fr 1fr}}
 """
-
 
 # ============================================================
 # HOME
 # ============================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def home():
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
->
-
-<title>STADY-PROXY</title>
-
-<style>{STADY_CSS}</style>
-
-</head>
-
-<body>
-
-<main class="page">
-
-    <div class="brand">
-        STADY-PROXY
-    </div>
-
-    <section class="frame">
-
-        <div class="poster">
-
-            <img
-                src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-            >
-
-        </div>
-
-        <div
-            class="status"
-            style="font-size:20px;margin:25px 0;"
-        >
-            SERVER ONLINE 🚀
-        </div>
-
-    </section>
-
-</main>
-
-</body>
-</html>"""
 
 
 # ============================================================
 # WATCH PAGE
 # ============================================================
 
-@app.get(
-    "/watch/{token}",
-    response_class=HTMLResponse
+# ============================================================
+# DEVICE SHARING / TV PAIRING ROUTES
+# ============================================================
+
+configure_sharing(STADY_CSS, stady_error_page)
+configure_pairing(STADY_CSS, stady_error_page, metric_inc)
+
+configure_cleanup(
+    cleanup_cache_sync=cleanup_cache_sync,
+    cache_locks=cache_locks,
+    cache_locks_guard=cache_locks_guard,
+    file_stream_semaphores=file_stream_semaphores,
+    file_stream_semaphores_guard=file_stream_semaphores_guard,
+    max_concurrent_per_file=MAX_CONCURRENT_PER_FILE,
+    cache_cleanup_interval=CACHE_CLEANUP_INTERVAL,
+    cleanup_request_rate_state=cleanup_request_rate_state,
+    cleanup_pair_attempts=cleanup_pair_attempts,
+    db_connect=db_connect,
+    remove_cache_token=remove_cache_token,
+    bot=bot,
 )
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTMLResponse(content=render_home_page(STADY_CSS))
+
+
+@app.get("/watch/{token}", response_class=HTMLResponse)
 async def watch(token):
-
     row = get_file(token)
-
     if not row:
         return HTMLResponse(
-        content=stady_error_page(),
-        status_code=404
+            content=render_error_page(),
+            status_code=404,
+            headers={"Cache-Control": "no-store"}
         )
-
-    filename = row["filename"]
-
-    safe_name = html.escape(filename)
-
-    encoded_filename = quote(
-        filename,
-        safe=""
-    )
-
-    stream_url = (
-        f"{PUBLIC_URL}/{token}/"
-        f"{encoded_filename}?action=stream"
-    )
-
-    file_size = int(row["size"])
-
-    if file_size >= 1024**3:
-
-        size_str = (
-            f"{file_size / 1024**3:.2f} GB"
+    return HTMLResponse(
+        content=await render_watch_page(
+            token, row, PUBLIC_URL, STADY_CSS,
+            get_owner_display, create_share_token, get_stream_mime, render_error_page,
         )
-
-    elif file_size >= 1024**2:
-
-        size_str = (
-            f"{file_size / 1024**2:.2f} MB"
-        )
-
-    else:
-
-        size_str = (
-            f"{file_size / 1024:.2f} KB"
-        )
-
-    created = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
     )
 
-    stream_no_scheme = (
-        stream_url
-        .replace("https://", "")
-        .replace("http://", "")
-    )
 
-    scheme = (
-        "https"
-        if stream_url.startswith("https://")
-        else "http"
-    )
+app.include_router(sharing_router)
+app.include_router(pairing_router)
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
 
-<head>
 
-<meta charset="UTF-8">
 
-<meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
->
 
-<title>
-STADY-PROXY | {safe_name}
-</title>
 
-<style>{STADY_CSS}</style>
 
-</head>
-
-<body>
-
-<main class="page">
-
-<div class="brand">
-STADY-PROXY
-</div>
-
-<section class="frame">
-
-<div class="poster">
-
-<img
-src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
-alt="Video thumbnail"
->
-
-<button
-    class="play"
-    aria-label="Play"
-    onclick="stream()"
->
-▶
-</button>
-
-</div>
-
-<div class="actions">
-
-<button
-    class="btn"
-    onclick="togglePlayers()"
->
-⏵ Stream ⏵
-</button>
-<a
-    class="btn"
-    href="{stream_url}&action=download"
-    download
-    style="text-decoration:none;text-align:center;display:block;"
->
-⬇ Download
-</a>
-<div
-    class="players"
-    id="players"
->
-<button onclick="openPlayer('mx')">
-MX Player
-</button>
-
-<button onclick="openPlayer('vlc')">
-VLC Mobile
-</button>
-
-<button onclick="openPlayer('playit')">
-PlayIt
-</button>
-
-<button onclick="openPlayer('splayer')">
-SPlayer
-</button>
-
-<button onclick="openPlayer('jplayer')">
-JPlayer
-</button>
-
-<button onclick="openPlayer('kmplayer')">
-KMPlayer
-</button>
-
-<button onclick="openPlayer('hdplayer')">
-HDPlayer
-</button>
-
-<button onclick="openPlayer('nplayer')">
-nPlayer
-</button>
-
-</div>
-
-</div>
-
-<div class="info">
-
-<div>
-📄 <b>File Name:</b>
-<span>{safe_name}</span>
-</div>
-
-<div>
-☰ <b>File Size:</b>
-<span>{size_str}</span>
-</div>
-
-<div>
-👤 <b>File Owner:</b>
-<span>STADY-PROXY</span>
-</div>
-
-<div>
-◷ <b>Created Time:</b>
-<span>{created}</span>
-</div>
-
-</div>
-
-</section>
-
-<div
-    class="status"
-    id="status"
->
-STADY-PROXY • READY
-</div>
-
-<div style="
-    text-align:center;
-    margin-top:22px;
-    padding-bottom:8px;
-    font-size:14px;
-    color:#888;
-">
-     Made with ♥ by
-    <a
-        href="https://www.instagram.com/2aswadhh_._kr"
-        target="_blank"
-        rel="noopener noreferrer"
-        style="
-            display:inline-flex;
-            align-items:center;
-            gap:6px;
-            margin-left:4px;
-            color:#ff2bd6;
-            text-decoration:none;
-            font-weight:700;
-            text-shadow:
-                0 0 5px rgba(255,43,214,.8),
-                0 0 12px rgba(255,43,214,.55);
-        "
-    >
-        <svg
-            width="17"
-            height="17"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-        >
-            <rect
-                x="3"
-                y="3"
-                width="18"
-                height="18"
-                rx="5"
-                stroke="currentColor"
-                stroke-width="2"
-            />
-            <circle
-                cx="12"
-                cy="12"
-                r="4"
-                stroke="currentColor"
-                stroke-width="2"
-            />
-            <circle
-                cx="17.5"
-                cy="6.5"
-                r="1"
-                fill="currentColor"
-            />
-        </svg>
-        aswadh_kr
-    </a>
-</div>
-
-</main>
-
-<script>
-
-const STREAM_URL = {stream_url!r};
-
-function setStatus(text) {{
-    document.getElementById("status").textContent = text;
-}}
-
-function stream() {{
-
-    const poster = document.querySelector(".poster");
-    if (!poster) return;
-
-    poster.innerHTML = `
-        <video
-            id="mainVideo"
-            controls
-            autoplay
-            playsinline
-            preload="metadata"
-            style="
-                width:100%;
-                height:100%;
-                display:block;
-                object-fit:contain;
-                background:#000;
-                border-radius:18px;
-            "
-        >
-            <source src="${{STREAM_URL}}" type="video/mp4">
-            Your browser does not support video playback.
-        </video>
-    `;
-
-    const video = document.getElementById("mainVideo");
-
-    video.play().catch(() => {{
-        video.controls = true;
-    }});
-
-    setStatus("STADY-PROXY • PLAYING ▶");
-}}
-
-function togglePlayers() {{
-
-    const players =
-        document.getElementById("players");
-
-    players.style.display =
-        players.style.display === "block"
-        ? "none"
-        : "block";
-}}
-
-function openPlayer(player) {{
-
-    let intent = "";
-
-    if (player === "mx") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.mxtech.videoplayer.ad;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "vlc") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=org.videolan.vlc;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "playit") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.playit.videoplayer;" +
-        "type=video/*;end;";
-    }}
-
-    else if (player === "kmplayer") {{
-
-        intent =
-        "intent://" +
-        "{stream_no_scheme}" +
-        "#Intent;scheme={scheme};" +
-        "package=com.kmplayer;" +
-        "type=video/*;end;";
-    }}
-
-    if (intent) {{
-        location.href = intent;
-    }}
-
-    else {{
-        location.href = STREAM_URL;
-    }}
-}}
-
-</script>
-
-</body>
-</html>"""
 
 
 
 # ============================================================
-# DEVICE SHARING
+# TV PAIRING
 # ============================================================
 
-@app.get("/share/{share_token}", response_class=HTMLResponse)
-async def share_page(share_token: str):
-    row = get_file_by_share_token(share_token)
-
-    if not row:
-        return HTMLResponse(
-            content=stady_error_page(),
-            status_code=404
-        )
-
-    filename = row["filename"]
-    safe_name = html.escape(filename)
-    receiver_url = f"{PUBLIC_URL}/receive/{share_token}"
-
-    return HTMLResponse(
-        content=f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>STADY-PROXY | Share</title>
-<style>{STADY_CSS}
-.sharebox{{text-align:center;padding:18px 8px 10px}}
-.qr{{width:min(310px,80vw);height:auto;background:#fff;padding:12px;border-radius:12px;margin:14px auto;display:block}}
-.small{{color:#a9bfd0;font-size:14px;line-height:1.6}}
-</style>
-</head>
-<body>
-<main class="page">
-<div class="brand">STADY-PROXY</div>
-<section class="frame">
-<div class="sharebox">
-<h2>📺 SHARE WITH ANOTHER DEVICE</h2>
-<p class="small">Scan this QR code on the other device.</p>
-<img class="qr" src="/share-qr/{share_token}.png" alt="Share QR code">
-<p><b>{safe_name}</b></p>
-<p class="small">The QR opens a receiver page with player options.</p>
-</div>
-</section>
-<div class="status">STADY-PROXY • READY</div>
-</main>
-</body>
-</html>"""
-    )
 
 
-@app.get("/share-qr/{share_token}.png")
-async def share_qr(share_token: str):
-    from io import BytesIO
-
-    row = get_file_by_share_token(share_token)
-
-    if not row:
-        return HTMLResponse(
-            content=stady_error_page(),
-            status_code=404
-        )
-
-    receiver_url = f"{PUBLIC_URL}/receive/{share_token}"
-
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=8,
-        border=4,
-    )
-    qr.add_data(receiver_url)
-    qr.make(fit=True)
-
-    image = qr.make_image(fill_color="black", back_color="white")
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-
-    return StreamingResponse(
-        buffer,
-        media_type="image/png",
-        headers={"Cache-Control": "no-store"}
-    )
 
 
-@app.get("/receive/{share_token}", response_class=HTMLResponse)
-async def receive_page(share_token: str):
-    row = get_file_by_share_token(share_token)
 
-    if not row:
-        return HTMLResponse(
-            content=stady_error_page(),
-            status_code=404
-        )
-
-    filename = row["filename"]
-    safe_name = html.escape(filename)
-    encoded_filename = quote(filename, safe="")
-    stream_url = (
-        f"{PUBLIC_URL}/{row['token']}/"
-        f"{encoded_filename}?action=stream"
-    )
-
-    stream_no_scheme = (
-        stream_url.replace("https://", "").replace("http://", "")
-    )
-    scheme = "https" if stream_url.startswith("https://") else "http"
-
-    return HTMLResponse(
-        content=f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>STADY-PROXY | Receiver</title>
-<style>{STADY_CSS}
-.receiver{{text-align:center;padding:18px 8px}}
-.file{{font-size:18px;word-break:break-word}}
-</style>
-</head>
-<body>
-<main class="page">
-<div class="brand">STADY-PROXY</div>
-<section class="frame">
-<div class="receiver">
-<h2>📺 READY TO STREAM</h2>
-<p class="file"><b>{safe_name}</b></p>
-
-<div class="actions">
-<button class="btn" onclick="openPlayer('vlc')">▶ VLC</button>
-<button class="btn" onclick="openPlayer('mx')">▶ MX PLAYER</button>
-<button class="btn" onclick="playBrowser()">🌐 BROWSER PLAYER</button>
-</div>
-
-<p class="small">If an external player does not open, use Browser Player.</p>
-</div>
-</section>
-<div class="status" id="status">STADY-PROXY • RECEIVER READY</div>
-</main>
-
-<script>
-const STREAM_URL = {stream_url!r};
-
-function setStatus(text) {{
-    document.getElementById("status").textContent = text;
-}}
-
-function playBrowser() {{
-    location.href = STREAM_URL;
-}}
-
-function openPlayer(player) {{
-    let intent = "";
-
-    if (player === "vlc") {{
-        intent =
-            "intent://" +
-            "{stream_no_scheme}" +
-            "#Intent;scheme={scheme};" +
-            "package=org.videolan.vlc;" +
-            "type=video/*;end;";
-    }} else if (player === "mx") {{
-        intent =
-            "intent://" +
-            "{stream_no_scheme}" +
-            "#Intent;scheme={scheme};" +
-            "package=com.mxtech.videoplayer.ad;" +
-            "type=video/*;end;";
-    }}
-
-    if (intent) {{
-        setStatus("STADY-PROXY • OPENING PLAYER");
-        location.href = intent;
-    }} else {{
-        playBrowser();
-    }}
-}}
-</script>
-</body>
-</html>"""
-    )
 
 
 # ============================================================
@@ -1951,7 +914,9 @@ async def direct_proxy(
 
     file_size = int(row["size"])
 
-    mime = row["mime"]
+    # Use the real filename extension for media responses. Telegram can store
+    # an incorrect generic MIME (for example application/zip for an .mp4).
+    mime = get_stream_mime(real_filename, row["mime"])
 
     range_header = request.headers.get(
         "range"
@@ -1979,13 +944,72 @@ async def direct_proxy(
 
     async def stream_generator():
 
-        async for chunk in telegram_stream(
-            message,
-            offset=start,
-            length=length
-        ):
+        metric_inc("streams_started")
+        file_semaphore = (
+            await get_file_stream_semaphore(token)
+        )
 
-            yield chunk
+        global_acquired = False
+        file_acquired = False
+
+        try:
+            try:
+                await asyncio.wait_for(
+                    global_stream_semaphore.acquire(),
+                    timeout=STREAM_ACQUIRE_TIMEOUT
+                )
+                global_acquired = True
+
+                await asyncio.wait_for(
+                    file_semaphore.acquire(),
+                    timeout=STREAM_ACQUIRE_TIMEOUT
+                )
+                file_acquired = True
+
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Too many active streams. "
+                        "Please try again shortly."
+                    ),
+                    headers={
+                        "Retry-After": str(
+                            STREAM_ACQUIRE_TIMEOUT
+                        )
+                    }
+                )
+
+            try:
+                # Stream the requested byte range directly from Telegram.
+                # This avoids putting the playback path behind the temporary
+                # chunk-cache layer, which can interfere with progressive
+                # playback/seek behavior in browsers and external players.
+                stream_action = "download" if action == "download" else "stream"
+                await asyncio.to_thread(record_file_access, token, stream_action)
+                sent_bytes = 0
+                async for chunk in telegram_stream(
+                    message=message, offset=start, length=length
+                ):
+                    sent_bytes += len(chunk)
+                    yield chunk
+                await asyncio.to_thread(record_bytes_served, token, sent_bytes)
+                metric_inc("streams_completed")
+            except asyncio.CancelledError:
+                metric_inc("stream_disconnects")
+                raise
+            except Exception:
+                metric_inc("streams_failed")
+                raise
+
+        finally:
+            if file_acquired:
+                file_semaphore.release()
+
+            if global_acquired:
+                global_stream_semaphore.release()
+
+            await remove_file_stream_semaphore(token)
     content_disposition = (
         f'attachment; filename="{quote(real_filename)}"'
         if action == "download"
@@ -1995,10 +1019,14 @@ async def direct_proxy(
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Content-Disposition": content_disposition,
-        "Cache-Control": "no-cache"
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
     }
+
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
     return StreamingResponse(
         stream_generator(),
         status_code=(
@@ -2010,83 +1038,50 @@ async def direct_proxy(
         headers=headers
     )
     
+@app.get("/metrics")
+async def metrics():
+    snapshot = get_metrics_snapshot()
+    snapshot["active_stream_slots"] = MAX_CONCURRENT_STREAMS - global_stream_semaphore._value
+    snapshot["active_telegram_downloads"] = MAX_CONCURRENT_TELEGRAM_DOWNLOADS - telegram_download_semaphore._value
+    snapshot["cache_active_chunks"] = len(cache_active_files)
+    snapshot["cache_locks"] = len(cache_locks)
+    snapshot["rate_limit_keys"] = len(request_rate_state)
+    snapshot["active_viewers"] = snapshot["active_stream_slots"]
+    try:
+        disk = shutil.disk_usage(CACHE_DIR)
+        snapshot["disk_free_gb"] = round(disk.free / 1024**3, 2)
+        snapshot["disk_used_gb"] = round(disk.used / 1024**3, 2)
+    except OSError:
+        pass
+    return snapshot
+
+
 # ============================================================
 # 12-HOUR AUTO CLEANUP
 # ============================================================
+# Implemented in cleanup.py; imported above to preserve the existing API.
 
-async def cleanup_expired_files():
 
-    while True:
+# ============================================================
+# SERVER SECURITY V3 INTEGRATION
+# ============================================================
+from security import (
+    configure as configure_security_v3,
+    security_v3_server_middleware,
+)
 
-        try:
+configure_security_v3(
+    metric_inc,
+    SECURITY_V3_SERVER_ENABLED,
+    SECURITY_V3_SERVER_CACHE_TTL,
+    SECURITY_V3_SERVER_MAX_STREAMS_PER_USER,
+)
 
-            expired_files = []
-
-            with db_connect() as db:
-
-                with db.cursor() as cursor:
-
-                    cursor.execute("""
-                        SELECT
-                            token,
-                            bot_chat_id,
-                            bot_message_id
-                        FROM files
-                        WHERE expires_at IS NOT NULL
-                        AND expires_at <= NOW()
-                    """)
-
-                    expired_files = cursor.fetchall()
-
-            for row in expired_files:
-
-                token = row["token"]
-                bot_chat_id = row["bot_chat_id"]
-                bot_message_id = row["bot_message_id"]
-
-                if bot_chat_id and bot_message_id:
-
-                    try:
-
-                        await bot.delete_messages(
-                            int(bot_chat_id),
-                            int(bot_message_id)
-                        )
-
-                    except Exception as error:
-
-                        print(
-                            "[CLEANUP] "
-                            "Telegram message delete failed:",
-                            error
-                        )
-
-                with db_connect() as db:
-
-                    with db.cursor() as cursor:
-
-                        cursor.execute("""
-                            DELETE FROM files
-                            WHERE token = %s
-                        """, (
-                            token,
-                        ))
-
-                    db.commit()
-
-                print(
-                    "[CLEANUP] Expired file removed:",
-                    token
-                )
-
-        except Exception as error:
-
-            print(
-                "[CLEANUP] Error:",
-                error
-            )
-
-        await asyncio.sleep(60)
+# Register V3 middleware additively after the original middleware function definitions.
+try:
+    app.middleware("http")(security_v3_server_middleware)
+except Exception as error:
+    print("[SECURITY V3] Middleware registration failed:", error)
 
 
 # ============================================================
@@ -2104,7 +1099,7 @@ async def main():
     print("=" * 65)
 
     print(
-        "       TELEGRAM DIRECT PROXY — STADY-PROXY"
+        "       TELEGRAM DIRECT PROXY — Adolf-StreamX"
     )
 
     print("=" * 65)
@@ -2175,6 +1170,10 @@ async def main():
             cleanup_expired_files()
         )
 
+    cache_cleanup_task = asyncio.create_task(
+        cleanup_cache_loop()
+    )
+
     try:
 
         await server.serve()
@@ -2188,6 +1187,13 @@ async def main():
                 await cleanup_task
             except asyncio.CancelledError:
                 pass
+
+        cache_cleanup_task.cancel()
+
+        try:
+            await cache_cleanup_task
+        except asyncio.CancelledError:
+            pass
 
         print(
             "[+] Disconnecting Telegram..."
@@ -2207,4 +1213,5 @@ if __name__ == "__main__":
         print(
             "\n[+] Server stopped."
 )
+
 

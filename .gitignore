@@ -17,3 +17,13 @@ files/
 
 server_backup.py
 security_bot.log
+
+.env
+*.env
+*.session
+*.db
+*.log
+__pycache__/
+*.pyc
+server.py.monolithic-backup
+updatedserver.py
