@@ -4,3 +4,6 @@ telethon
 python-dotenv
 psutil
 psycopg2-binary
+gunicorn
+python-telegram-bot
+qrcode[pil]

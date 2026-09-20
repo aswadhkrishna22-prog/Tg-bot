@@ -672,3 +672,215 @@ function openPlayer(player) {{
 </body>
 </html>"""
 
+
+
+def render_receive_page(
+    share_token,
+    row,
+    public_url,
+    stady_css,
+    get_stream_mime_func,
+    owner_display=None,
+    remote_session_id=None,
+):
+    """Render the QR/TV receiver page with an embedded browser player.
+
+    The receiver keeps the TV inside the Adolf-StreamX UI: scanning the QR
+    does not send the TV to a bare stream URL. The same forest/glass visual
+    language is used as the main watch page, and the Browser Player is the
+    primary in-page player.
+    """
+    filename = row["filename"]
+    safe_name = html.escape(filename)
+    encoded_filename = quote(filename, safe="")
+    stream_url = (
+        f"{public_url}/{row['token']}/"
+        f"{encoded_filename}?action=stream"
+    )
+    mime = get_stream_mime_func(filename, row.get("mime") if hasattr(row, "get") else None)
+
+    file_size = int(row["size"])
+    if file_size >= 1024**3:
+        size_str = f"{file_size / 1024**3:.2f} GB"
+    elif file_size >= 1024**2:
+        size_str = f"{file_size / 1024**2:.2f} MB"
+    else:
+        size_str = f"{file_size / 1024:.2f} KB"
+
+    owner_text = "Adolf-StreamX"
+    if owner_display:
+        owner_text = html.escape(str(owner_display))
+
+    forest_image = (
+        "https://images.unsplash.com/photo-1448375240586-882707db888b"
+        "?auto=format&fit=crop&w=1600&q=90"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#05070d">
+<title>Adolf-StreamX | TV Player</title>
+<style>
+{stady_css}
+
+.tv-page{{width:min(1120px,calc(100% - 28px));margin:0 auto;padding:28px 0 48px}}
+.tv-header{{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}}
+.tv-brand{{font-size:22px;font-weight:900;letter-spacing:-.4px}}
+.tv-brand span{{background:linear-gradient(90deg,#9b5cff,#4cc9ff);-webkit-background-clip:text;background-clip:text;color:transparent}}
+.tv-status{{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid rgba(110,140,190,.18);border-radius:999px;background:rgba(12,17,30,.72);color:#aeb9cc;font-size:12px;font-weight:700}}
+.tv-status i{{width:7px;height:7px;border-radius:50%;background:#5ee7a5;box-shadow:0 0 12px rgba(94,231,165,.7)}}
+.tv-card{{overflow:hidden;border-radius:24px;border:1px solid rgba(125,145,190,.18);background:#050913;box-shadow:0 24px 80px rgba(0,0,0,.42)}}
+.tv-player{{position:relative;width:100%;aspect-ratio:16/9;background:#07100b;overflow:hidden}}
+.tv-poster{{position:absolute;inset:0;background-image:url("{forest_image}");background-size:cover;background-position:center;transition:opacity .25s ease}}
+.tv-poster::after{{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,5,10,.08),rgba(2,5,10,.50))}}
+.tv-video{{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:2}}
+.tv-video[hidden]{{display:none}}
+.tv-start{{position:absolute;z-index:3;left:50%;top:50%;transform:translate(-50%,-50%);width:92px;height:92px;border:1px solid rgba(255,255,255,.45);border-radius:50%;background:rgba(5,10,20,.82);color:#fff;display:grid;place-items:center;font-size:34px;padding-left:5px;cursor:pointer;box-shadow:0 12px 42px rgba(0,0,0,.45),0 0 0 7px rgba(120,95,255,.10);backdrop-filter:blur(14px);transition:transform .18s ease,background .18s ease}}
+.tv-start:hover{{transform:translate(-50%,-50%) scale(1.06);background:rgba(10,16,30,.92)}}
+.tv-start[hidden]{{display:none}}
+.tv-meta{{padding:20px 22px;border-top:1px solid rgba(125,145,190,.12)}}
+.tv-title{{margin:0;color:#f4f7ff;font-size:18px;font-weight:800;line-height:1.4;overflow-wrap:anywhere}}
+.tv-sub{{margin-top:6px;color:#8995aa;font-size:13px}}
+.tv-actions{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}}
+.tv-btn{{min-height:58px;border-radius:16px;border:1px solid rgba(125,145,190,.16);background:linear-gradient(180deg,#0d1423,#090f1b);color:#edf2fb;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:9px;font-size:15px;font-weight:800;cursor:pointer}}
+.tv-btn.primary{{background:linear-gradient(135deg,#7139d8,#2e74d8);border-color:rgba(155,120,255,.48)}}
+.tv-info{{margin-top:18px;overflow:hidden;border:1px solid rgba(125,145,190,.14);border-radius:20px;background:rgba(8,12,21,.78)}}
+.tv-info-head{{padding:18px 20px;border-bottom:1px solid rgba(125,145,190,.12);font-size:13px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:#c6d0e2}}
+.tv-info-row{{display:grid;grid-template-columns:150px 1fr;gap:16px;padding:15px 20px;border-bottom:1px solid rgba(125,145,190,.08)}}
+.tv-info-row:last-child{{border-bottom:0}}
+.tv-label{{color:#727f95;font-size:13px}}
+.tv-value{{color:#dce4f1;font-size:14px;overflow-wrap:anywhere}}
+.tv-note{{margin-top:18px;padding:15px 18px;border:1px solid rgba(125,145,190,.12);border-radius:16px;background:rgba(8,12,21,.72);color:#aeb9cc;text-align:center;font-size:13px;line-height:1.6}}
+.tv-error{{display:none;position:absolute;z-index:4;left:16px;right:16px;bottom:70px;padding:12px 14px;border:1px solid rgba(255,120,120,.25);border-radius:12px;background:rgba(20,5,8,.88);color:#ffd4d4;text-align:center;font-size:13px;backdrop-filter:blur(12px)}}
+@media(max-width:650px){{.tv-page{{width:calc(100% - 20px);padding-top:16px}}.tv-header{{margin-bottom:14px}}.tv-brand{{font-size:19px}}.tv-status{{font-size:10px;padding:7px 9px}}.tv-card{{border-radius:18px}}.tv-start{{width:72px;height:72px;font-size:27px}}.tv-meta{{padding:16px}}.tv-actions{{grid-template-columns:1fr}}.tv-info-row{{grid-template-columns:1fr;gap:5px;padding:13px 16px}}}}
+</style>
+</head>
+<body>
+<main class="tv-page">
+<header class="tv-header">
+    <div class="tv-brand">Adolf-<span>StreamX</span></div>
+    <div class="tv-status"><i></i> TV CONNECTED</div>
+</header>
+
+<section class="tv-card">
+    <div class="tv-player" id="tvPlayer">
+        <div class="tv-poster" id="tvPoster"></div>
+        <button class="tv-start" id="tvStart" type="button" onclick="startTvVideo()" aria-label="Play video">▶</button>
+        <video class="tv-video" id="tvVideo" controls playsinline preload="metadata" hidden></video>
+        <div class="tv-error" id="tvError">Browser could not decode this video's codec/container.</div>
+    </div>
+    <div class="tv-meta">
+        <p class="tv-title">{safe_name}</p>
+        <div class="tv-sub">{size_str} · {html.escape(mime)} · Browser Player</div>
+    </div>
+</section>
+
+<div class="tv-actions">
+    <button class="tv-btn primary" type="button" onclick="startTvVideo()">▶ BROWSER PLAYER</button>
+    <button class="tv-btn" type="button" onclick="copyStreamLink()">⛓ COPY STREAM LINK</button>
+</div>
+
+{("<div class=\"tv-note\" style=\"margin-top:12px\"><a class=\"tv-btn\" href=\"/remote/" + html.escape(str(remote_session_id)) + "\">📱 OPEN PHONE REMOTE</a></div>") if remote_session_id else ""}
+
+<section class="tv-info">
+    <div class="tv-info-head">▣ File Information</div>
+    <div class="tv-info-row"><div class="tv-label">File Name</div><div class="tv-value">{safe_name}</div></div>
+    <div class="tv-info-row"><div class="tv-label">File Size</div><div class="tv-value">{size_str}</div></div>
+    <div class="tv-info-row"><div class="tv-label">File Owner</div><div class="tv-value">{owner_text}</div></div>
+</section>
+
+<div class="tv-note" id="tvStatus">📺 QR connection ready · Tap <b>Browser Player</b> to play on this page.</div>
+</main>
+
+<script>
+const STREAM_URL = {stream_url!r};
+const tvVideo = document.getElementById("tvVideo");
+const tvPoster = document.getElementById("tvPoster");
+const tvStart = document.getElementById("tvStart");
+const tvError = document.getElementById("tvError");
+const tvStatus = document.getElementById("tvStatus");
+const REMOTE_SESSION_ID = {remote_session_id!r};
+const REMOTE_WS_URL = (() => {{
+    if (!REMOTE_SESSION_ID) return "";
+    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+    return scheme + "//" + location.host + "/ws/tv/" + encodeURIComponent(REMOTE_SESSION_ID);
+}})();
+let remoteSocket = null;
+
+function connectRemote() {{
+    if (!REMOTE_WS_URL || remoteSocket) return;
+    try {{
+        remoteSocket = new WebSocket(REMOTE_WS_URL);
+        remoteSocket.onopen = () => setTvStatus("📺 TV remote connected · Browser Player ready");
+        remoteSocket.onclose = () => {{ remoteSocket = null; }};
+        remoteSocket.onerror = () => {{ remoteSocket = null; }};
+        remoteSocket.onmessage = (event) => {{
+            try {{ handleRemoteCommand(JSON.parse(event.data)); }} catch (_) {{}}
+        }};
+    }} catch (_) {{ remoteSocket = null; }}
+}}
+
+function handleRemoteCommand(payload) {{
+    if (!payload || !payload.command) return;
+    const command = payload.command;
+    if (command === "play") startTvVideo();
+    else if (command === "pause") tvVideo.pause();
+    else if (command === "toggle") {{ if (tvVideo.paused) startTvVideo(); else tvVideo.pause(); }}
+    else if (command === "seek_forward") tvVideo.currentTime = Math.min((tvVideo.duration || Infinity), tvVideo.currentTime + (Number(payload.seconds) || 10));
+    else if (command === "seek_backward") tvVideo.currentTime = Math.max(0, tvVideo.currentTime - (Number(payload.seconds) || 10));
+    else if (command === "seek") tvVideo.currentTime = Math.max(0, Math.min(tvVideo.duration || Infinity, Number(payload.seconds) || 0));
+    else if (command === "volume_up") tvVideo.volume = Math.min(1, tvVideo.volume + 0.1);
+    else if (command === "volume_down") tvVideo.volume = Math.max(0, tvVideo.volume - 0.1);
+    else if (command === "set_volume") tvVideo.volume = Math.max(0, Math.min(1, (Number(payload.value) || 0) / 100));
+    else if (command === "mute") tvVideo.muted = !tvVideo.muted;
+    else if (command === "fullscreen") {{ if (tvVideo.requestFullscreen) tvVideo.requestFullscreen().catch(() => {{}}); }}
+    else if (command === "exit_fullscreen") {{ if (document.exitFullscreen) document.exitFullscreen().catch(() => {{}}); }}
+    else if (command === "stop") {{ tvVideo.pause(); tvVideo.currentTime = 0; }}
+}}
+
+if (REMOTE_WS_URL) window.addEventListener("load", connectRemote);
+
+function setTvStatus(text) {{
+    if (tvStatus) tvStatus.textContent = text;
+}}
+
+function startTvVideo() {{
+    if (!tvVideo) return;
+
+    tvPoster.style.opacity = "0";
+    tvStart.hidden = true;
+    tvVideo.hidden = false;
+
+    if (!tvVideo.src) tvVideo.src = STREAM_URL;
+
+    tvVideo.play().then(() => {{
+        setTvStatus("▶ Playing on Adolf-StreamX Browser Player");
+    }}).catch(() => {{
+        setTvStatus("▶ Player ready · tap the play control to start");
+    }});
+}}
+
+function copyStreamLink() {{
+    navigator.clipboard.writeText(STREAM_URL).then(() => {{
+        setTvStatus("✅ Stream link copied");
+    }}).catch(() => {{
+        window.prompt("Copy this stream link:", STREAM_URL);
+    }});
+}}
+
+tvVideo.addEventListener("loadstart", () => setTvStatus("⏳ Loading stream…"));
+tvVideo.addEventListener("waiting", () => setTvStatus("⏳ Buffering…"));
+tvVideo.addEventListener("canplay", () => setTvStatus("✓ Stream ready"));
+tvVideo.addEventListener("play", () => setTvStatus("▶ Playing on Adolf-StreamX Browser Player"));
+tvVideo.addEventListener("pause", () => setTvStatus("⏸ Paused"));
+tvVideo.addEventListener("ended", () => setTvStatus("✓ Playback finished"));
+tvVideo.addEventListener("error", () => {{
+    tvError.style.display = "block";
+    setTvStatus("⚠ Browser codec/container not supported");
+}});
+</script>
+</body>
+</html>"""

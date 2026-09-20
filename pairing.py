@@ -170,4 +170,3 @@ def configure(css, error_page, metric_callback):
     STADY_CSS = css
     stady_error_page = error_page
     metric_inc = metric_callback
-

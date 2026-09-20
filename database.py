@@ -1,7 +1,7 @@
 import re
 import secrets
 import uuid
-
+import time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -15,6 +15,7 @@ from config import (
 
 
 _metric_callback = lambda name, amount=1: None
+_database_initialized = False
 
 
 def set_metric_callback(callback):
@@ -42,6 +43,14 @@ def db_connect():
 
 
 def init_database():
+    """Initialize/upgrade the schema once per process.
+
+    Safe to call repeatedly: subsequent calls in the same process return
+    immediately, while each new process still performs the normal schema check.
+    """
+    global _database_initialized
+    if _database_initialized:
+        return
 
     with db_connect() as db:
 
@@ -142,6 +151,8 @@ def init_database():
                 cursor.execute(column_sql)
 
         db.commit()
+
+    _database_initialized = True
 
 
 def add_file(
@@ -309,14 +320,26 @@ def create_pair_code(token):
                         WHERE token = %s
                     """, (pair_code, token))
 
+                    # Verify the newly-created pairing inside the SAME transaction.
+                    # This preserves the old safety check without opening a second
+                    # PostgreSQL connection immediately after the insert.
+                    cursor.execute("""
+                        SELECT f.token
+                        FROM tv_pairings p
+                        JOIN files f ON f.token = p.token
+                        WHERE p.code = %s
+                          AND p.expires_at > NOW()
+                          AND (f.expires_at IS NULL OR f.expires_at > NOW())
+                        LIMIT 1
+                    """, (pair_code,))
+                    verified = cursor.fetchone()
+                    if not verified:
+                        raise RuntimeError("Pairing code was stored but verification failed")
+
                 db.commit()
 
-            # Hard verification through the same resolver used by /pair/{code}.
-            if get_file_by_pair_code(pair_code):
-                print(f"[PAIR] Created verified code {pair_code} for token {token}")
-                return pair_code
-
-            print(f"[PAIR] ERROR: code {pair_code} was stored but resolver could not find it")
+            print(f"[PAIR] Created verified code {pair_code} for token {token}")
+            return pair_code
 
         except psycopg2.errors.UniqueViolation:
             # Either the random code or token already exists.  Generate another.

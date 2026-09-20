@@ -3,11 +3,16 @@ from io import BytesIO
 from urllib.parse import quote
 
 import qrcode
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from config import PUBLIC_URL
 from database import create_share_token, get_file_by_share_token
+from utils import get_stream_mime
+from owner import get_owner_display
+from pages import render_receive_page
+from remote_control import remote_manager, message_size_ok, validate_command
+from remote_ui import render_remote_page
 
 router = APIRouter()
 
@@ -118,126 +123,90 @@ async def share_qr(share_token: str):
 @router.get("/receive/{share_token}", response_class=HTMLResponse)
 async def receive_page(share_token: str):
     row = get_file_by_share_token(share_token)
-
     if not row:
-        return HTMLResponse(
-            content=stady_error_page(),
-            status_code=404
-        )
+        return HTMLResponse(content=stady_error_page(), status_code=404)
+    try:
+        session_id = await remote_manager.create_session()
+    except Exception:
+        session_id = None
+    owner_display = None
+    try:
+        owner_display = await get_owner_display(row)
+    except Exception:
+        owner_display = None
+    return HTMLResponse(content=render_receive_page(
+        share_token=share_token,
+        row=row,
+        public_url=PUBLIC_URL,
+        stady_css=STADY_CSS,
+        get_stream_mime_func=get_stream_mime,
+        owner_display=owner_display,
+        remote_session_id=session_id,
+    ))
 
-    filename = row["filename"]
-    safe_name = html.escape(filename)
-    encoded_filename = quote(filename, safe="")
-    stream_url = (
-        f"{PUBLIC_URL}/{row['token']}/"
-        f"{encoded_filename}?action=stream"
-    )
 
-    stream_no_scheme = (
-        stream_url.replace("https://", "").replace("http://", "")
-    )
-    scheme = "https" if stream_url.startswith("https://") else "http"
+@router.get("/remote/{session_id}", response_class=HTMLResponse)
+async def remote_page(session_id: str):
+    if await remote_manager.get_session(session_id) is None:
+        return HTMLResponse(content=stady_error_page(), status_code=404)
+    return HTMLResponse(content=render_remote_page(PUBLIC_URL, session_id))
 
-    return HTMLResponse(
-        content=f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Adolf-StreamX | Receiver</title>
-<style>{STADY_CSS}
-.receiver{{text-align:center;padding:18px 8px}}
-.file{{font-size:18px;word-break:break-word}}
-</style>
-</head>
-<body>
-<main class="page">
-<div class="brand">Adolf-StreamX</div>
-<section class="frame">
-<div class="receiver">
-<h2>📺 READY TO STREAM</h2>
-<p class="file"><b>{safe_name}</b></p>
 
-<div class="actions">
-<button class="btn" onclick="openPlayer('vlc')">▶ VLC</button>
-<button class="btn" onclick="openPlayer('mx')">▶ MX PLAYER</button>
-<button class="btn" onclick="playBrowser()">🌐 BROWSER PLAYER</button>
-</div>
+@router.websocket("/ws/tv/{session_id}")
+async def tv_socket(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    if not await remote_manager.attach_tv(session_id, websocket):
+        await websocket.close(code=1008)
+        return
+    try:
+        while True:
+            message = await websocket.receive_text()
+            if not message_size_ok(message):
+                await websocket.close(code=1009)
+                return
+            # TV sends playback/status events; forward them to the paired phone.
+            try:
+                import json
+                payload = json.loads(message)
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                await remote_manager.send_to_phone(session_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session = await remote_manager.get_session(session_id)
+        if session and session.tv_socket is websocket:
+            session.tv_socket = None
 
-<p class="small">
-⚠️ Can't open directly in VLC or MX Player?<br>
-Copy the link below and paste it into your player.
-</p>
 
-<button class="btn" onclick="copyStreamLink()">
-    📋 COPY STREAM LINK
-</button>
-
-<p id="copyLink" class="small" style="word-break:break-all;margin-top:12px;">
-{stream_url}
-</p>
-
-<p class="small">If an external player does not open, use Browser Player.</p>
-</div>
-</section>
-<div class="status" id="status">Adolf-StreamX • RECEIVER READY</div>
-</main>
-
-<script>
-const STREAM_URL = {stream_url!r};
-
-function setStatus(text) {{
-    document.getElementById("status").textContent = text;
-}}
-
-function playBrowser() {{
-    location.href = STREAM_URL;
-}}
-
-function copyStreamLink() {{
-    navigator.clipboard.writeText(STREAM_URL).then(() => {{
-        setStatus("✅ STREAM LINK COPIED");
-    }}).catch(() => {{
-        const input = document.createElement("input");
-        input.value = STREAM_URL;
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand("copy");
-        input.remove();
-        setStatus("✅ STREAM LINK COPIED");
-    }});
-}}
-
-function openPlayer(player) {{
-    let intent = "";
-
-    if (player === "vlc") {{
-        intent =
-            "intent://" +
-            "{stream_no_scheme}" +
-            "#Intent;scheme={scheme};" +
-            "package=org.videolan.vlc;" +
-            "type=video/*;end;";
-    }} else if (player === "mx") {{
-        intent =
-            "intent://" +
-            "{stream_no_scheme}" +
-            "#Intent;scheme={scheme};" +
-            "package=com.mxtech.videoplayer.ad;" +
-            "type=video/*;end;";
-    }}
-
-    if (intent) {{
-        setStatus("Adolf-StreamX • OPENING PLAYER");
-        location.href = intent;
-    }} else {{
-        playBrowser();
-    }}
-}}
-</script>
-</body>
-</html>"""
-    )
+@router.websocket("/ws/remote/{session_id}")
+async def remote_socket(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    if not await remote_manager.attach_phone(session_id, websocket):
+        await websocket.close(code=1008)
+        return
+    try:
+        while True:
+            message = await websocket.receive_text()
+            if not message_size_ok(message):
+                await websocket.close(code=1009)
+                return
+            try:
+                import json
+                payload = json.loads(message)
+            except Exception:
+                continue
+            if not validate_command(payload):
+                await websocket.send_json({"ok": False, "error": "Invalid command"})
+                continue
+            await remote_manager.send_to_tv(session_id, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session = await remote_manager.get_session(session_id)
+        if session and session.phone_socket is websocket:
+            session.phone_socket = None
 
 def configure(css, error_page):
     global STADY_CSS, stady_error_page
