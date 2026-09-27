@@ -176,8 +176,7 @@ def render_home_page(stady_css):
             6️⃣ Your TV will open the receiver page with VLC, MX Player and Browser Player options.<br><br>
             ⏳ Pairing codes follow the same 12-hour file expiry.
         </p>
-      <footer class="footer">   <div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"     class="instagram-link"     target="_blank"     rel="noopener noreferrer"     aria-label="Instagram @aswadh_kr"> <svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"     aria-label="Instagram" role="img" fill="none"     xmlns="http://www.w3.org/2000/svg"> <defs> <linearGradient id="instagram-gradient"     x1="4" y1="20" x2="20" y2="4"     gradientUnits="userSpaceOnUse"> <stop stop-color="#FFDC80"/> <stop offset="0.25" stop-color="#FCAD45"/> <stop offset="0.5" stop-color="#F77737"/> <stop offset="0.75" stop-color="#E1306C"/> <stop offset="1" stop-color="#833AB4"/> </linearGradient> </defs>  <rect x="3.25" y="3.25" width="17.5" height="17.5"               rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="12" cy="12" r="4.15"                 stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="17.35" cy="6.65" r="1"                 fill="url(#instagram-gradient)"/>     </svg>      <span>@aswadh_kr</span>       </div>  </footer>
-
+<footer class="footer">   <div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/aswadh_kr"     class="instagram-link"     target="_blank"     rel="noopener noreferrer"     aria-label="Instagram @aswadh_kr"> <svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"     aria-label="Instagram" role="img" fill="none"     xmlns="http://www.w3.org/2000/svg"> <defs> <linearGradient id="instagram-gradient"     x1="4" y1="20" x2="20" y2="4"     gradientUnits="userSpaceOnUse"> <stop stop-color="#FFDC80"/> <stop offset="0.25" stop-color="#FCAD45"/> <stop offset="0.5" stop-color="#F77737"/> <stop offset="0.75" stop-color="#E1306C"/> <stop offset="1" stop-color="#833AB4"/> </linearGradient> </defs>  <rect x="3.25" y="3.25" width="17.5" height="17.5"               rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="12" cy="12" r="4.15"                 stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="17.35" cy="6.65" r="1"                 fill="url(#instagram-gradient)"/>     </svg>      <span>@aswadh_kr</span>  </a>    <div class="privacy-footer-link">         <a href="/privacy">© Privacy &amp; Policy of Adolf-StreamX</a>     </div>  </footer> 
     </section>
 
 <script>
@@ -825,40 +824,7 @@ def render_receive_page(
 
 <div class="tv-note" id="tvStatus">📺 QR connection ready · Tap <b>Browser Player</b> to play on this page.</div>
 </main>
-<footer class="footer">
-<div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"
-class="instagram-link"
-target="_blank"
-rel="noopener noreferrer"
-aria-label="Instagram @aswadh_kr">
-<svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"
-aria-label="Instagram" role="img" fill="none"
-xmlns="http://www.w3.org/2000/svg">
-<defs>
-<linearGradient id="instagram-gradient"
-x1="4" y1="20" x2="20" y2="4"
-gradientUnits="userSpaceOnUse">
-<stop stop-color="#FFDC80"/>
-<stop offset="0.25" stop-color="#FCAD45"/>
-<stop offset="0.5" stop-color="#F77737"/>
-<stop offset="0.75" stop-color="#E1306C"/>
-<stop offset="1" stop-color="#833AB4"/>
-</linearGradient>
-</defs>
 
-<rect x="3.25" y="3.25" width="17.5" height="17.5"
-          rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>
-
-    <circle cx="12" cy="12" r="4.15"
-            stroke="url(#instagram-gradient)" stroke-width="2"/>
-
-    <circle cx="17.35" cy="6.65" r="1"
-            fill="url(#instagram-gradient)"/>
-</svg>
-
-<span>@aswadh_kr</span>
-
-</div>  </footer>
 <script>
 const STREAM_URL = {stream_url!r};
 const tvVideo = document.getElementById("tvVideo");

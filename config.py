@@ -21,7 +21,7 @@ API_HASH = os.getenv("TG_API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 SECURITY_BOT_TOKEN = os.getenv("SECURITY_BOT_TOKEN", "").strip()
 
-BOT_MODE = os.getenv("BOT_MODE", "false").strip().lower() in (
+BOT_MODE = os.getenv("BOT_MODE", "true").strip().lower() in (
     "1", "true", "yes", "on"
 )
 
@@ -46,7 +46,7 @@ CACHE_MAX_SIZE = int(
     os.getenv("CACHE_MAX_SIZE", str(1024 * 1024 * 1024))
 )
 CACHE_DIR = Path(
-    os.getenv("CACHE_DIR", "/tmp/stady_proxy_cache")
+    os.getenv("CACHE_DIR", "cache")
 )
 CACHE_PER_FILE_MAX_SIZE = int(
     os.getenv("CACHE_PER_FILE_MAX_SIZE", str(256 * 1024 * 1024))

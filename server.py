@@ -810,6 +810,288 @@ configure_cleanup(
     remove_cache_token=remove_cache_token,
     bot=bot,
 )
+@app.get("/privacy", response_class=HTMLResponse)
+@app.get("/privacy/", response_class=HTMLResponse)
+async def privacy_policy():
+    return HTMLResponse(
+        content="""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy & Policy • Adolf-StreamX</title>
+    <meta name="description" content="Privacy & Policy of Adolf-StreamX">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            color: #f5f5f5;
+            background:
+                radial-gradient(circle at top left, rgba(120, 70, 255, 0.18), transparent 35%),
+                radial-gradient(circle at bottom right, rgba(0, 220, 180, 0.12), transparent 35%),
+                #07090d;
+            padding: 24px 14px;
+        }
+
+        .policy-wrap {
+            width: min(900px, 100%);
+            margin: 0 auto;
+        }
+
+        .policy-card {
+            background: rgba(15, 18, 25, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 22px;
+            padding: 28px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(14px);
+        }
+
+        .brand {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: clamp(25px, 6vw, 38px);
+            background: linear-gradient(90deg, #a56cff, #4de7ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand p {
+            margin: 9px 0 0;
+            color: #9ca3af;
+        }
+
+        h2 {
+            margin-top: 30px;
+            color: #ffffff;
+            font-size: 20px;
+        }
+
+        p, li {
+            color: #c8cdd6;
+            line-height: 1.75;
+        }
+
+        ul {
+            padding-left: 22px;
+        }
+
+        .updated {
+            text-align: center;
+            color: #777f8d;
+            font-size: 13px;
+            margin-top: 28px;
+        }
+
+        .back {
+            display: inline-block;
+            margin-bottom: 18px;
+            color: #a56cff;
+            text-decoration: none;
+        }
+
+        .back:hover {
+            text-decoration: underline;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 28px;
+            padding-top: 22px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            color: #aeb4bf;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        .footer a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 14px 10px;
+            }
+
+            .policy-card {
+                padding: 21px 17px;
+                border-radius: 18px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main class="policy-wrap">
+        <a class="back" href="#" onclick="history.back(); return false;">← Back to Adolf-StreamX</a>
+
+        <section class="policy-card">
+            <header class="brand">
+                <h1>Privacy &amp; Policy</h1>
+                <p>Adolf-StreamX</p>
+            </header>
+
+            <h2>1. Information We Process</h2>
+            <p>
+                Adolf-StreamX may process information required to provide,
+                maintain, secure and improve its bot and website services.
+            </p>
+
+            <h2>2. Telegram Information</h2>
+            <p>
+                When you interact with the Telegram bot, information such as
+                your Telegram user ID, username, display name and messages or
+                commands sent to the bot may be processed as required for the
+                service.
+            </p>
+
+            <h2>3. Files and File Metadata</h2>
+            <p>
+                Depending on how the service is used, file-related information
+                may include filename, file size, MIME type, Telegram-related
+                identifiers, temporary stream or share tokens, expiry details
+                and access statistics.
+            </p>
+
+            <h2>4. Website and Technical Information</h2>
+            <p>
+                Technical information such as IP address, browser or device
+                information, timestamps, requested URLs, connection statistics,
+                errors and security-related logs may be processed for operating
+                and protecting the service.
+            </p>
+
+            <h2>5. Why Information Is Processed</h2>
+            <ul>
+                <li>To provide the requested bot and website functionality.</li>
+                <li>To create temporary file access and streaming links.</li>
+                <li>To support TV pairing and related features.</li>
+                <li>To monitor errors, performance and service reliability.</li>
+                <li>To detect abuse and protect the service.</li>
+                <li>To comply with applicable legal requirements when necessary.</li>
+            </ul>
+
+            <h2>6. Retention</h2>
+            <p>
+                Temporary files, links and related information may be retained
+                only for the period required by the service configuration and
+                operational requirements. Technical and security logs may be
+                retained for a limited period where necessary.
+            </p>
+
+            <h2>7. Third-Party Services</h2>
+            <p>
+                The service may use third-party providers for hosting,
+                databases, Telegram connectivity, security, analytics or
+                advertising. Those providers may process information according
+                to their own policies and terms.
+            </p>
+
+            <h2>8. Advertising</h2>
+            <p>
+                Advertising services may be used on parts of the website.
+                Depending on the advertising provider, advertising technologies
+                may process technical information such as browser or device
+                information.
+            </p>
+
+            <h2>9. Cookies and Similar Technologies</h2>
+            <p>
+                The website may use cookies or similar browser technologies
+                where required for functionality, security, preferences or
+                third-party services.
+            </p>
+
+            <h2>10. Security</h2>
+            <p>
+                Reasonable technical and operational measures may be used to
+                protect the service and information processed through it.
+                However, no internet service can guarantee absolute security.
+            </p>
+
+            <h2>11. User Responsibility</h2>
+            <p>
+                Users are responsible for ensuring that files and other content
+                they submit or distribute through the service are lawful and
+                that they have the necessary rights or permissions to use them.
+            </p>
+
+            <h2>12. Privacy Requests</h2>
+            <p>
+                For privacy-related questions or requests concerning your
+                information, please contact the service operator through the
+                official contact method provided by Adolf-StreamX.
+            </p>
+
+            <h2>13. Changes to This Policy</h2>
+            <p>
+                This Privacy &amp; Policy page may be updated when the service,
+                its features or its data practices change. The latest version
+                published on this page will apply from its stated update date.
+            </p>
+
+            <p class="updated">
+                Last updated: 20 September 2026
+            </p>
+
+            <footer class="footer">  
+<div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"    
+class="instagram-link"    
+target="_blank"    
+rel="noopener noreferrer"    
+aria-label="Instagram @aswadh_kr">
+<svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"    
+aria-label="Instagram" role="img" fill="none"    
+xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="instagram-gradient"    
+x1="4" y1="20" x2="20" y2="4"    
+gradientUnits="userSpaceOnUse">
+<stop stop-color="#FFDC80"/>
+<stop offset="0.25" stop-color="#FCAD45"/>
+<stop offset="0.5" stop-color="#F77737"/>
+<stop offset="0.75" stop-color="#E1306C"/>
+<stop offset="1" stop-color="#833AB4"/>
+</linearGradient>
+</defs>
+
+<rect x="3.25" y="3.25" width="17.5" height="17.5"    
+          rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>    
+
+    <circle cx="12" cy="12" r="4.15"    
+            stroke="url(#instagram-gradient)" stroke-width="2"/>    
+
+    <circle cx="17.35" cy="6.65" r="1"    
+            fill="url(#instagram-gradient)"/>    
+</svg>
+
+<span>@aswadh_kr</span>
+
+</div>  </footer>
+        </section>
+    </main>
+</body>
+</html>
+        """,
+        headers={"Cache-Control": "no-store"}
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return HTMLResponse(content=render_home_page(STADY_CSS))

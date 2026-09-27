@@ -63,7 +63,7 @@ body{{overflow:hidden;background:radial-gradient(circle at 8% 8%,rgba(124,58,237
 .action-btn-404{{min-height:46px;border:1px solid rgba(255,255,255,.18);border-radius:11px;background:rgba(12,17,28,.78);color:#eef2f7;text-decoration:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;cursor:pointer}}
 .action-btn-404:hover{{border-color:rgba(255,255,255,.35);transform:translateY(-1px)}}
 @media(max-width:430px){{.watch-page{{width:calc(100% - 18px);padding-top:16px}}.watch-brand{{font-size:19px}}.watch-status{{font-size:10px;padding:7px 9px}}.media-card{{border-radius:18px}}.poster{{min-height:205px}}.poster-play{{width:70px;height:70px;font-size:27px}}.action-grid{{grid-template-columns:1fr}}.info-row{{grid-template-columns:1fr;gap:6px;padding:13px 16px}}.error-modal{{width:min(340px,calc(100vw - 24px));padding:20px 15px 16px}}.error-code{{font-size:54px}}.buttons{{grid-template-columns:1fr}}}}
-.privacy-footer-link a {{ color: #aeb4bf !important; }}\n</style>
+.privacy-footer-link a { color: #aeb4bf !important; }\n</style>
 </head>
 <body>
 <main class="watch-page" aria-hidden="true">
@@ -176,7 +176,6 @@ def render_home_page(stady_css):
             6️⃣ Your TV will open the receiver page with VLC, MX Player and Browser Player options.<br><br>
             ⏳ Pairing codes follow the same 12-hour file expiry.
         </p>
-      <footer class="footer">   <div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"     class="instagram-link"     target="_blank"     rel="noopener noreferrer"     aria-label="Instagram @aswadh_kr"> <svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"     aria-label="Instagram" role="img" fill="none"     xmlns="http://www.w3.org/2000/svg"> <defs> <linearGradient id="instagram-gradient"     x1="4" y1="20" x2="20" y2="4"     gradientUnits="userSpaceOnUse"> <stop stop-color="#FFDC80"/> <stop offset="0.25" stop-color="#FCAD45"/> <stop offset="0.5" stop-color="#F77737"/> <stop offset="0.75" stop-color="#E1306C"/> <stop offset="1" stop-color="#833AB4"/> </linearGradient> </defs>  <rect x="3.25" y="3.25" width="17.5" height="17.5"               rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="12" cy="12" r="4.15"                 stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="17.35" cy="6.65" r="1"                 fill="url(#instagram-gradient)"/>     </svg>      <span>@aswadh_kr</span>       </div>  </footer>
 
     </section>
 
@@ -587,7 +586,7 @@ async def render_watch_page(token, row, public_url, stady_css, get_owner_display
 <footer class="footer">
     <div>
         Made with <span class="heart">❤️</span> by
-        <a href="https://www.instagram.com/2aswadhh_._kr"
+        <a href="https://www.instagram.com/aswadh_kr"
            class="instagram-link"
            target="_blank"
            rel="noopener noreferrer"
@@ -825,40 +824,7 @@ def render_receive_page(
 
 <div class="tv-note" id="tvStatus">📺 QR connection ready · Tap <b>Browser Player</b> to play on this page.</div>
 </main>
-<footer class="footer">
-<div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"
-class="instagram-link"
-target="_blank"
-rel="noopener noreferrer"
-aria-label="Instagram @aswadh_kr">
-<svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"
-aria-label="Instagram" role="img" fill="none"
-xmlns="http://www.w3.org/2000/svg">
-<defs>
-<linearGradient id="instagram-gradient"
-x1="4" y1="20" x2="20" y2="4"
-gradientUnits="userSpaceOnUse">
-<stop stop-color="#FFDC80"/>
-<stop offset="0.25" stop-color="#FCAD45"/>
-<stop offset="0.5" stop-color="#F77737"/>
-<stop offset="0.75" stop-color="#E1306C"/>
-<stop offset="1" stop-color="#833AB4"/>
-</linearGradient>
-</defs>
 
-<rect x="3.25" y="3.25" width="17.5" height="17.5"
-          rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>
-
-    <circle cx="12" cy="12" r="4.15"
-            stroke="url(#instagram-gradient)" stroke-width="2"/>
-
-    <circle cx="17.35" cy="6.65" r="1"
-            fill="url(#instagram-gradient)"/>
-</svg>
-
-<span>@aswadh_kr</span>
-
-</div>  </footer>
 <script>
 const STREAM_URL = {stream_url!r};
 const tvVideo = document.getElementById("tvVideo");
