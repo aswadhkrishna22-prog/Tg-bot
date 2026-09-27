@@ -1347,7 +1347,7 @@ async def metrics():
 # ============================================================
 # SERVER SECURITY V3 INTEGRATION
 # ============================================================
-from security import (
+from security_server import (
     configure as configure_security_v3,
     security_v3_server_middleware,
 )
