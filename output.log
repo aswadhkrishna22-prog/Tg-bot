@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/home/Tg-bot/server.py", line 25, in <module>
+    from config import (
+    ...<13 lines>...
+    )
+  File "/data/data/com.termux/files/home/Tg-bot/config.py", line 120, in <module>
+    raise RuntimeError("TG_API_ID is missing or invalid")
+RuntimeError: TG_API_ID is missing or invalid

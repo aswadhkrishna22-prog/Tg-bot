@@ -1,0 +1,106 @@
+def render_home_page(stady_css):
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
+
+<title>Adolf-StreamX</title>
+
+<style>{stady_css}</style>
+
+</head>
+
+<body>
+
+<main class="page">
+
+    <div class="brand">
+        Adolf-StreamX
+    </div>
+
+    <section class="frame">
+
+        <div class="poster">
+
+            <img
+                src="https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=85"
+            >
+
+        </div>
+
+        <div
+            class="status"
+            style="font-size:20px;margin:25px 0;"
+        >
+            SERVER ONLINE 🚀
+        </div>
+
+        <div class="actions">
+            <input
+                id="pairCode"
+                class="btn"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                maxlength="6"
+                placeholder="ENTER 6-DIGIT TV CODE"
+                style="text-align:center;"
+            >
+            <button
+                class="btn"
+                onclick="pairDevice()"
+            >
+                📺 PAIR TV
+            </button>
+            <div id="pairError" style="grid-column:1/-1;color:#ff7b8c;text-align:center;font-weight:700;font-size:13px;min-height:20px"></div>
+        </div>
+
+        <p style="text-align:center;line-height:1.7;color:#a9bfd0;font-size:14px;">
+            <b>📖 TV PAIRING — HOW TO USE</b><br><br>
+            1️⃣ Send a video/file to the Adolf-StreamX Telegram bot.<br>
+            2️⃣ Open the generated SHARE page on your phone.<br>
+            3️⃣ Find the 6-digit TV pairing code shown there (it is also sent in Telegram).<br>
+            4️⃣ On your TV, open this Adolf-StreamX home page.<br>
+            5️⃣ Enter the 6-digit code above and tap <b>PAIR TV</b>.<br>
+            6️⃣ Your TV will open the receiver page with VLC, MX Player and Browser Player options.<br><br>
+            ⏳ Pairing codes follow the same 12-hour file expiry.
+        </p>
+      <footer class="footer">   <div>Made with <span class="heart">❤️</span> by</div>  <a href="https://www.instagram.com/2aswadhh_._kr"     class="instagram-link"     target="_blank"     rel="noopener noreferrer"     aria-label="Instagram @aswadh_kr"> <svg class="instagram-icon" width="17" height="17" viewBox="0 0 24 24"     aria-label="Instagram" role="img" fill="none"     xmlns="http://www.w3.org/2000/svg"> <defs> <linearGradient id="instagram-gradient"     x1="4" y1="20" x2="20" y2="4"     gradientUnits="userSpaceOnUse"> <stop stop-color="#FFDC80"/> <stop offset="0.25" stop-color="#FCAD45"/> <stop offset="0.5" stop-color="#F77737"/> <stop offset="0.75" stop-color="#E1306C"/> <stop offset="1" stop-color="#833AB4"/> </linearGradient> </defs>  <rect x="3.25" y="3.25" width="17.5" height="17.5"               rx="5" stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="12" cy="12" r="4.15"                 stroke="url(#instagram-gradient)" stroke-width="2"/>          <circle cx="17.35" cy="6.65" r="1"                 fill="url(#instagram-gradient)"/>     </svg>      <span>@aswadh_kr</span>       </div>  </footer>
+
+    </section>
+
+<script>
+async function pairDevice() {{
+    const input = document.getElementById("pairCode");
+    const code = input.value.trim();
+    const error = document.getElementById("pairError");
+    if (!/^[0-9]{{6}}$/.test(code)) {{
+        error.textContent = "Code must be 6 digits";
+        input.focus();
+        return;
+    }}
+    error.textContent = "";
+    try {{
+        const response = await fetch("/pair/" + code, {{headers: {{"X-Pair-AJAX": "1"}}}});
+        const redirect = response.headers.get("X-Pair-Redirect");
+        if (redirect) {{ location.href = redirect; return; }}
+        const data = await response.json().catch(() => null);
+        error.textContent = (data && data.error) || "Code is not valid";
+    }} catch (_) {{
+        error.textContent = "Unable to verify code. Try again.";
+    }}
+}}
+</script>
+
+</main>
+
+</body>
+</html>"""
+
