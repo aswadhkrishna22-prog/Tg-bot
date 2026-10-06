@@ -1,3 +1,4 @@
 telethon==1.44.0
 python-dotenv==1.0.1
 psycopg[binary]==3.3.4
+google-genai
