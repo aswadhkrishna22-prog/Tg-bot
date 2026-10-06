@@ -1,4 +1,8 @@
 import asyncio
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from telethon import TelegramClient
 
@@ -9,6 +13,46 @@ from security.proxy_database import purge_all_blocked_users
 from security.commands import register_all
 from security.v3 import setup as setup_v3, security_v3_loop, init_security_v3_shared_db
 from security.service_monitor import monitor_loop, set_security_bot_state, check_external_services, render_check
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            body = json.dumps({
+                "status": "ok",
+                "service": "security-bot",
+            }).encode("utf-8")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        body = b"Not Found"
+        self.send_response(404)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", "10000"))
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+
+    thread = threading.Thread(
+        target=server.serve_forever,
+        daemon=True,
+    )
+    thread.start()
+
+    print(f"[HEALTH] HTTP server listening on 0.0.0.0:{port}")
+    return server
 
 security_bot = TelegramClient("security_bot", API_ID, API_HASH)
 register_all(security_bot)
@@ -35,6 +79,8 @@ async def security_v2_loop():
         await asyncio.sleep(SECURITY_SCAN_INTERVAL)
 
 async def main():
+    health_server = start_health_server()
+
     init_security_database()
     init_security_v2_database()
     init_security_v3_shared_db()
@@ -64,17 +110,35 @@ async def main():
         await send_monitor_message(render_check(initial_results))
     except Exception as error:
         print("[MONITOR] Initial check failed:", error)
+
     cleanup_task = asyncio.create_task(cleanup_loop())
     v2_task = asyncio.create_task(security_v2_loop())
     v3_task = asyncio.create_task(security_v3_loop())
+
     try:
         print("[+] Security bot is running.")
         await security_bot.run_until_disconnected()
     finally:
         set_security_bot_state(False)
+
+        try:
+            health_server.shutdown()
+            health_server.server_close()
+            print("[HEALTH] HTTP server stopped.")
+        except Exception as error:
+            print("[HEALTH] Shutdown error:", error)
+
         for task in (monitor_task, cleanup_task, v2_task, v3_task):
             task.cancel()
-        await asyncio.gather(monitor_task, cleanup_task, v2_task, v3_task, return_exceptions=True)
+
+        await asyncio.gather(
+            monitor_task,
+            cleanup_task,
+            v2_task,
+            v3_task,
+            return_exceptions=True,
+        )
+
         try:
             await security_bot.send_message(
                 OWNER_ID,
@@ -86,7 +150,9 @@ async def main():
             )
         except Exception as error:
             print("[STATUS] Offline notification failed:", error)
+
         await security_bot.disconnect()
+
 
 if __name__ == "__main__":
     try:
